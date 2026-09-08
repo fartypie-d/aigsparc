@@ -41,6 +41,17 @@ class InstallArgsTest(unittest.TestCase):
         r = parse_only("--nosuchflag")
         self.assertEqual(r.returncode, 64)
 
+    def test_doctor_flag_is_parsed(self):
+        # 파싱만 확인한다. 실제 dispatch·리포트는 tests/test_kit_doctor.py 가 실행으로 검증한다
+        # (INSTALL_PARSE_ONLY 로 동작을 검증하면 항상 참인 테스트가 된다 — PITFALLS 1).
+        r = parse_only("--claude", "--doctor")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("DOCTOR=1", r.stdout)
+
+    def test_doctor_flag_defaults_to_off(self):
+        r = parse_only("--claude")
+        self.assertIn("DOCTOR=0", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

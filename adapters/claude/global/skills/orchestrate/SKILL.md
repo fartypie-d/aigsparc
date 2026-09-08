@@ -33,7 +33,7 @@ description: Use when 사용자가 "오케스트레이터로 진행"·"작업 �
 | 인터뷰 | 필수 | 필수 + **프론트로딩 강화** (아래) |
 | GATE 1 (지시서 승인) | 승인 필수 | **동일 — 승인 필수.** 인터뷰 직후라 사용자 재석 중. 무인 구간은 GATE 1 이후부터 |
 | 중간 선택지 | skip = 미승인, 재확인 | 120초 후 skip = 권장안 채택 + 자동 결정 로그 |
-| GATE 2 (페이즈 말 통합 승인) | 승인 후 마감 | 120초 후 skip = **로컬 커밋 상태로 마감. 푸시는 절대 금지** |
+| GATE 2 (페이즈 말 통합 승인) | 승인 후 마감 | 120초 후 skip = **로컬 커밋 상태로 마감. 프로젝트 세션의 푸시는 금지** — 푸시·병합은 홈 감독 세션의 규칙(CI 초록 + SIGN OFF + 충돌 없음 + 🔴 미포함이면 자동 병합, 프로젝트 CLAUDE.md "병합 주체" 참조) |
 | 🔴 위험 도메인 task (실자금 trader·운영 DB·운영 컨테이너) | 한 줄 재진술 확인 후 진행 | **자동 진행 금지** — `pending-approval` 보류, 독립 task는 계속 |
 | 리뷰어 반려 🔴 | 재위임 최대 2회 → 중단 | **동일 — 완화 없음.** 반려를 권장안으로 통과시키지 않는다 |
 | 검수·리뷰어 호출 | task마다 필수 | **동일 — 생략 금지** |
@@ -187,10 +187,20 @@ task마다 **에이전트**(로스터에서 선택) + 의존 순서를 배정한
 
 ### 모델 배정 — 중앙 정책 + 자동 폴백 (2026-08-01)
 
-모델은 에이전트 frontmatter가 아니라 **`~/.config/opencode/model-policy.json`의 tier 체인**에서
-나온다 — `run-delegation.sh`(v2)가 체인 순서대로 `-m`을 주입하고, 한도·무응답(429/quota/즉시
-실패)을 감지하면 **자동으로 다음 모델로 재시도**한다. frontmatter의 `model:`은 수동 실행용
-안전 기본값일 뿐이다.
+모델은 에이전트 frontmatter가 아니라 **프로젝트 정책을 우선하고 host 정책으로 폴백하는 tier 체인**에서
+나온다 — `run-delegation.sh`는 먼저 `<git 최상위>/.claude/model-policy.json`을 찾고, Git 저장소가
+아니면 `<호출 cwd>/.claude/model-policy.json`을 찾은 뒤 `~/.config/opencode/model-policy.json`으로
+폴백한다. 체인 순서대로 `-m`을 주입하고, 한도·무응답(429/quota/즉시 실패)과 `status 402`,
+`insufficient credits`, `credit balance is too low`, `usage limit reached`를 포함한 크레딧 오류를
+감지하면 **자동으로 다음 모델로 재시도**한다. 실제 정책은 `POLICY_USED=<경로> (project|host)`로
+stdout과 `.wrapper` 로그에 기록한다. 두 정책 파일이 모두 없으면 exit 64로 종료하며 두 후보 경로를
+오류에 표시한다. frontmatter의 `model:`은 수동 실행용 안전 기본값일 뿐이다.
+
+프로젝트 정책은 저장소에 추적·커밋되므로 이를 바꿀 수 있는 사람이 위임 모델 선택에 영향을 줄 수 있다.
+따라서 PR에서는 정책 파일의 diff도 코드 변경과 같은 눈높이로 검토한다. `model-doctor.sh`는 host 정책을
+기본값으로 검사하므로 프로젝트 정책은 `--policy .claude/model-policy.json`으로 검증한다. 서브모듈이나
+중첩 저장소에서 호출하면 `git rev-parse --show-toplevel`이 중첩 루트를 가리키므로 의도한 저장소
+루트에서 실행한다.
 
 | tier | 체인 | 쓰는 곳 |
 |---|---|---|
@@ -254,6 +264,10 @@ task를 쓰기 전에 기존 자산을 검색한다 (`grep -rn`으로 핵심 동
 
 - **인덱스**에 두는 것: frontmatter, 인터뷰 결과, task 목록 표(번호·제목·에이전트·상태·커밋),
   자동 결정 로그, **전파 제약 누적**. 진행 중 갱신은 인덱스에만 한다.
+- **task 파일은 frontmatter로 시작한다** — `task: <번호>`·`status: pending|in-progress|done|blocked|superseded`.
+  상태 전이는 표 수정이 아니라 `python3 scripts/phase-tools.py tasks <phase> --set <N>=<status>`로
+  갱신한다 (기계 판독 단일 소스 — 무인 드라이버·대시보드가 이 값을 읽는다. 조회:
+  `tasks <phase>` JSON, 다음 실행 대상: `tasks <phase> --next`).
 - **파트 그룹핑 (세션 단위 계획)**: 한 세션에 다 못 끝낼 phase는 인덱스에서 task를
   **파트**로 묶는다 — `## 파트 <phase>-1 (세션 1): Task 1~3` 식. **파트 경계 = 세션 경계 =
   HANDOFF 시점**이다. 인계를 임기응변으로 만들지 말고 지시서 작성 시점에 계획할 것.
@@ -359,7 +373,7 @@ printf '%s\n' '{"ts":"'"$(date -Is)"'","phase":179,"part":"179-6","task":"8","ev
 | `part_started` | 파트 작업 시작 (세션 시작) | `session`(uuid, 알면) |
 | `gate_asked` / `gate_answered` | GATE 1·2·실증(배포) 게이트 | `gate`(`gate1`\|`gate2`\|`deploy`), answered엔 `answer`(`approve`\|`reject`\|`skip`) |
 | `delegation_started` / `delegation_done` | 6단계 위임 직전/완료 통지 후 | `agent`, done엔 `model`(`MODEL_USED=` 실측값)·`exit` |
-| `review_verdict` | 7단계 판정 직후 | `reviewers`(배열), `verdict`(`pass`\|`reject`), `red`·`orange`(개수) |
+| `review_verdict` | 7단계 판정 직후 | `reviewers`(배열), `verdict`(`pass`\|`reject`), `red`·`orange`(개수), `reject`일 때만 `reject_cause`(`model`\|`instruction`\|`spec`\|`unknown`) |
 | `task_committed` | task 로컬 커밋 후 | `commit`(해시) |
 | `handoff_written` | HANDOFF 작성 시 | `next_task` |
 | `phase_closed` | phase-close 후 | — |
@@ -425,6 +439,7 @@ bash scripts/run-delegation.sh <에이전트> .orchestrate/task<N>.prompt .orche
 4번째 인자는 지시서 task의 `모델:` 필드 그대로 (생략=default, `heavy`, `provider/model`).
 스크립트에 프리플라이트·serve attach 프로젝트별/standalone 전역 flock·API 키 자가 주입·init 워치독·PID 완료 대기·
 **모델 폴백 체인**(4단계 참조)이 전부 내장되어 있다. exit 코드로 판정한다:
+래퍼 진단 신호(`MODEL_FALLBACK`·`LOCK_WAIT`·`SESSION_ABORTED`·`MODEL_USED=` 등)는 `<로그파일>.wrapper`에도 남으므로, 폴백·락 대기의 사후 확인은 그 파일을 본다.
 
 | exit | 의미 | 대응 |
 |---|---|---|
@@ -435,7 +450,8 @@ bash scripts/run-delegation.sh <에이전트> .orchestrate/task<N>.prompt .orche
 | 5 | `MODEL_EXHAUSTED` — 체인 전 모델 실패 (전원 한도/장애) | 침묵 재시도 금지 — 사용자에게 보고 (한도 갱신 대기 or 정책 파일 조정) |
 | 6 | 고아 세션 가능성 — 클라이언트를 정리했으나 서버 세션 abort를 확인하지 못함 | `bash scripts/opencode-serve-ctl.sh sessions`로 확인 |
 | 7 | `AGENT_NOT_FOUND` — 없는 에이전트가 기본 에이전트로 조용히 폴백(rc=0)하는 것을 래퍼가 감지 | 로스터에서 에이전트명 확인 후 재위임 |
-| 64/66 | 사용법·정책 파일 오류 / 프롬프트 파일 없음 | 호출 수정 |
+| 8 | `WALLCLOCK_CAP` — 총 벽시계 상한 초과 (기본 3600초, `ORCHESTRATE_DELEGATION_MAX_SEC`로 조정) | 로그 확인 후 범위를 쪼개 재위임. 폴백하지 않으므로 침묵 재시도 금지 |
+| 64/66 | 사용법·정책 파일 오류 / 프롬프트 파일 없음; 64의 `WALLCLOCK_CAP_INVALID`: 손상된 `ORCHESTRATE_DELEGATION_MAX_SEC`(비수치·음수·허용 범위 초과)는 착수 전 거부. 빈 값·`0`은 정당한 비활성 형태 | 호출 수정 |
 
 > 스크립트가 없는 프로젝트(신규)에는 키트의 `core/scripts/run-delegation.sh`를
 > 복사해 설치한다. 워치독·pgrep 함정의 배경은 프로젝트 CLAUDE.md "이 저장소의 함정" 참조.
@@ -533,11 +549,11 @@ task-orchestrator 경유 시에도 **이 구성과 위임 실행은 메인이 �
 
 **GATE 2 = 페이즈 말 통합 결과 승인** (task별 커밋 승인이 아니다): 페이즈의 모든 task가 끝나면
 커밋 목록·`git diff --stat <페이즈 시작 커밋>..HEAD`·검증 총괄을 제시하고 AskUserQuestion으로
-승인을 받는다. 전부 로컬 커밋이므로 되돌리기 가능하다. **푸시는 GATE 2와 별개의 명시 승인 전용.**
+승인을 받는다. 전부 로컬 커밋이므로 되돌리기 가능하다. **푸시·병합은 GATE 2와 별개다 — 감독 체계가 있는 프로젝트는 CLAUDE.md "병합 주체" 조건으로 감독이 하고, 없는 프로젝트는 명시 승인 전용.**
 **실자금 등 🔴 위험 도메인도 동일하게 통합 승인 1회로 진행한다** — task별 커밋 승인을
 따로 요구하지 않는다 (비가역 경로가 비활성인 기간 기준. 재활성 시 재검토).
 사용자가 되돌리기를 원하면 해당 커밋을 revert하고, squash를 원하면 지시대로 정리한다.
-오토 모드에서는 120초 무응답(skip) 시 로컬 커밋 상태로 두되 푸시는 금지 ("오토 모드" 절 참조).
+오토 모드에서는 120초 무응답(skip) 시 로컬 커밋 상태로 두되 프로젝트 세션의 푸시는 금지(병합은 감독 규칙, "오토 모드" 절 참조).
 
 > **완료 알림 turn에서 GATE 2에 도달한 경우에도** (백그라운드 위임 완료 → 자동 재개 → 검수까지
 > 마친 상황) **AskUserQuestion으로 승인을 받는다** — 2026-07-24 스트리밍 패치로 연장 turn에서도

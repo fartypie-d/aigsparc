@@ -16,10 +16,11 @@ class InstallMenuTest(unittest.TestCase):
         """INSTALL_PARSE_ONLY는 메뉴 실행 전 인자 파싱 결과만 출력하고 종료한다."""
         result = parse_only("--claude", "--providers=qwen", "--plan=pro", "typescript")
         self.assertEqual(result.returncode, 0, result.stderr)
+        # 필드를 추가할 때는 이 정확 일치 단정을 함께 갱신해야 한다 (Phase 10 에서 DOCTOR 추가).
         self.assertEqual(
             result.stdout,
             "HARNESSES=claude\nPROVIDERS=qwen\nCONTAINERS=\nPLAN=pro\n"
-            "ECC_LANGS=typescript\n",
+            "ECC_LANGS=typescript\nDOCTOR=0\n",
         )
         self.assertNotIn("선택", result.stderr)
 

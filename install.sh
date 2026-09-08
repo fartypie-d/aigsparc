@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # aigsprac 전역 설치 (멱등) — macOS / Linux
 #
-# 사용법: ./install.sh [--claude] [--codex] [--containers=browser,dashboard] \
+# 사용법: ./install.sh [--claude] [--codex] [--doctor] [--add-missing] [--containers=browser,dashboard] \
 #                     [--providers=qwen,openai,xai,antigravity] [--plan=<이름>] [ECC 언어 ...]
 #
 # 기존 파일은 .bak-<날짜>로 백업 후 교체한다 (secrets.env는 절대 덮어쓰지 않음).
@@ -38,6 +38,8 @@ HARNESS_FROM_FLAG=0
 ECC_LANGS_FROM_FLAG=0
 PROVIDERS_FROM_FLAG=0
 PLAN_FROM_FLAG=0
+DOCTOR=0
+ADD_MISSING=0
 
 add_ecc_lang() { # <언어> [cli]
   _ecc_lang_arg=$1
@@ -73,6 +75,8 @@ for arg in "$@"; do
   case "$arg" in
     --claude)       HARNESSES="${HARNESSES:+$HARNESSES }claude"; HARNESS_FROM_FLAG=1 ;;
     --codex)        HARNESSES="${HARNESSES:+$HARNESSES }codex"; HARNESS_FROM_FLAG=1 ;;
+    --doctor)       DOCTOR=1 ;;
+    --add-missing)  ADD_MISSING=1 ;;
     --providers=*)  PROVIDERS="${arg#--providers=}"; PROVIDERS_FROM_FLAG=1 ;;
     --containers=*) CONTAINERS="${arg#--containers=}"; CONTAINERS_FROM_FLAG=1 ;;
     # --plan 은 Task 11(apply-plan-profile)이 소비한다
@@ -88,6 +92,26 @@ done
 if [ "${#ECC_LANGS[@]}" -gt 0 ]; then
   ECC_LANGS_FROM_FLAG=1
 fi
+if [ "$ADD_MISSING" = "1" ] && [ "$DOCTOR" != "1" ]; then
+  echo "--add-missing 은 --doctor 와 함께만 사용할 수 있습니다." >&2
+  exit 64
+fi
+if [ "$DOCTOR" = "1" ] && { [ "$CONTAINERS_FROM_FLAG" = "1" ] || [ "$PROVIDERS_FROM_FLAG" = "1" ] || [ "$PLAN_FROM_FLAG" = "1" ] || [ "$ECC_LANGS_FROM_FLAG" = "1" ]; }; then
+  echo "--doctor 와 함께 설치 옵션을 사용할 수 없습니다." >&2
+  [ "$CONTAINERS_FROM_FLAG" = "1" ] && echo "거부된 옵션: --containers=$CONTAINERS" >&2
+  [ "$PROVIDERS_FROM_FLAG" = "1" ] && echo "거부된 옵션: --providers=$PROVIDERS" >&2
+  [ "$PLAN_FROM_FLAG" = "1" ] && echo "거부된 옵션: --plan=$PLAN" >&2
+  [ "$ECC_LANGS_FROM_FLAG" = "1" ] && echo "거부된 옵션: ${ECC_LANGS[*]}" >&2
+  exit 64
+fi
+if [ "$DOCTOR" = "1" ] && [ "${INSTALL_PARSE_ONLY:-0}" != "1" ]; then
+  set --
+  case " $HARNESSES " in *" claude "*) set -- "$@" --claude ;; esac
+  case " $HARNESSES " in *" codex "*) set -- "$@" --codex ;; esac
+  [ "$ADD_MISSING" = "1" ] && set -- "$@" --add-missing
+  exec bash "$KIT_DIR/core/scripts/kit-doctor.sh" "$@"
+fi
+
 if [ "${INSTALL_SELFTEST_MENU:-0}" != "1" ] && [ "${INSTALL_SELFTEST_KEYPARSE:-0}" != "1" ] && [ "${INSTALL_SELFTEST_TUI:-0}" != "1" ] && [ "${INSTALL_SELFTEST_WIZARD:-0}" != "1" ] && [ "${INSTALL_SELFTEST_MCP:-0}" != "1" ]; then
   [ -n "$HARNESSES" ] || HARNESSES="$(stamp_detect_harness)" || exit 64
 fi
@@ -98,6 +122,7 @@ if [ "${INSTALL_PARSE_ONLY:-0}" = "1" ]; then
   echo "CONTAINERS=$CONTAINERS"
   echo "PLAN=$PLAN"
   echo "ECC_LANGS=${ECC_LANGS[*]:-}"
+  echo "DOCTOR=$DOCTOR"
   exit 0
 fi
 
@@ -1570,6 +1595,23 @@ if [ ! -f "$HOME/.config/opencode/secrets.env" ]; then
   note "생성: ~/.config/opencode/secrets.env (키 입력 필요)"
 else
   note "유지: ~/.config/opencode/secrets.env (덮어쓰지 않음)"
+fi
+
+# 스킬 팩(플러그인·룰 팩) 업데이트 감지기 — 알림만 하고 자동 적용하지 않는다.
+mkdir -p "$HOME/.local/bin" "$HOME/.config/skillpack-update"
+backup_and_copy "$KIT_DIR/core/scripts/skillpack-update-check.sh" \
+                "$HOME/.local/bin/skillpack-update-check.sh"
+chmod +x "$HOME/.local/bin/skillpack-update-check.sh"
+if [ ! -f "$HOME/.config/skillpack-update/packs.conf" ]; then
+  cp "$KIT_DIR/core/skillpack/packs.conf.example" "$HOME/.config/skillpack-update/packs.conf"
+  chmod 600 "$HOME/.config/skillpack-update/packs.conf"
+  note "생성: ~/.config/skillpack-update/packs.conf (점검 대상 편집 가능)"
+else
+  note "유지: ~/.config/skillpack-update/packs.conf (덮어쓰지 않음)"
+fi
+if command -v crontab >/dev/null 2>&1 && \
+   ! crontab -l 2>/dev/null | grep -q 'skillpack-update-check.sh'; then
+  note "크론 미등록 — 일일 점검을 원하면: (crontab -l; echo '40 5 * * * \$HOME/.local/bin/skillpack-update-check.sh >/dev/null 2>&1') | crontab -"
 fi
 
 say "6/7 모델 프로바이더"

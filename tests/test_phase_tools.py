@@ -384,5 +384,410 @@ class TestJanitor(Base):
         self.assertTrue((orch / "fresh.log").exists())
 
 
+class TasksTest(Base):
+    """Phase 11 RED — task 상태 기계판독화 (`tasks` 서브커맨드)."""
+
+    def seed_tasks(self):
+        self.init_registry()
+        tasks_dir = self.root / "DOCs" / "PHASE7_seed.tasks"
+        tasks_dir.mkdir()
+        (tasks_dir / "task1.md").write_text(
+            "---\ntask: 1\nstatus: done\n---\n\n# Task 1: 첫 작업\n"
+        )
+        (tasks_dir / "task2.md").write_text(
+            "---\ntask: 2\nstatus: pending\n---\n\n# Task 2: 둘째 작업\n"
+        )
+        (tasks_dir / "task3.md").write_text("# Task 3: frontmatter 없음\n")
+        return tasks_dir
+
+    def test_tasks_lists_status_as_json(self):
+        self.seed_tasks()
+        r = run_tool(["tasks", "7"], self.root, self.env, check=True)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["phase"], 7)
+        by_n = {t["task"]: t for t in data["tasks"]}
+        self.assertEqual(by_n[1]["status"], "done")
+        self.assertEqual(by_n[2]["status"], "pending")
+        self.assertEqual(by_n[2]["title"], "Task 2: 둘째 작업")
+        # frontmatter 없는 기존 파일은 무경고 디폴트 대입 없이 unknown으로 노출
+        self.assertEqual(by_n[3]["status"], "unknown")
+        self.assertFalse(data["complete"])
+
+    def test_tasks_set_updates_frontmatter(self):
+        tasks_dir = self.seed_tasks()
+        run_tool(["tasks", "7", "--set", "2=in-progress"], self.root, self.env, check=True)
+        self.assertIn("status: in-progress", (tasks_dir / "task2.md").read_text())
+        # frontmatter 없던 파일에 --set 하면 frontmatter를 삽입한다
+        run_tool(["tasks", "7", "--set", "3=pending"], self.root, self.env, check=True)
+        text = (tasks_dir / "task3.md").read_text()
+        self.assertTrue(text.startswith("---\n"))
+        self.assertIn("task: 3", text)
+        self.assertIn("status: pending", text)
+        self.assertIn("# Task 3: frontmatter 없음", text)
+
+    def test_tasks_set_rejects_unknown_status(self):
+        self.seed_tasks()
+        r = run_tool(["tasks", "7", "--set", "2=finished"], self.root, self.env)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_tasks_next_prefers_in_progress_then_lowest_pending(self):
+        self.seed_tasks()
+        r = run_tool(["tasks", "7", "--next"], self.root, self.env, check=True)
+        self.assertEqual(r.stdout.strip(), "2")
+        run_tool(["tasks", "7", "--set", "2=in-progress"], self.root, self.env, check=True)
+        r = run_tool(["tasks", "7", "--next"], self.root, self.env, check=True)
+        self.assertEqual(r.stdout.strip(), "2")
+
+    def test_tasks_next_exits_1_when_no_runnable(self):
+        # done·blocked·unknown만 남으면 실행 가능 task 없음 — 드라이버 루프 종료 조건
+        self.seed_tasks()
+        run_tool(["tasks", "7", "--set", "2=blocked"], self.root, self.env, check=True)
+        r = run_tool(["tasks", "7", "--next"], self.root, self.env)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_tasks_complete_true_when_all_done_or_superseded(self):
+        tasks_dir = self.seed_tasks()
+        (tasks_dir / "task3.md").unlink()
+        run_tool(["tasks", "7", "--set", "2=superseded"], self.root, self.env, check=True)
+        data = json.loads(run_tool(["tasks", "7"], self.root, self.env, check=True).stdout)
+        self.assertTrue(data["complete"])
+
+
+class WorktreeTasksTest(Base):
+    """Phase 16 RED — KF-13: tasks 가 워크트리 cwd 의 페이즈 문서를 우선 해석한다."""
+
+    def seed_worktree_tasks(self):
+        self.init_registry()
+        self.wt = self.root / ".claude" / "worktrees" / "phase8-x"
+        self.git("worktree", "add", "-b", "feature/phase8-x", str(self.wt), "develop")
+        docs = self.wt / "DOCs"
+        (docs / "PHASE8_x.md").write_text("---\nphase: 8\nstatus: in-progress\n---\n")
+        tdir = docs / "PHASE8_x.tasks"
+        tdir.mkdir()
+        (tdir / "task1.md").write_text("---\ntask: 1\nstatus: done\n---\n\n# Task 1: 첫\n")
+        (tdir / "task2.md").write_text("---\ntask: 2\nstatus: pending\n---\n\n# Task 2: 둘\n")
+        return tdir
+
+    def test_tasks_next_from_worktree_cwd_finds_worktree_tasks(self):
+        self.seed_worktree_tasks()
+        r = run_tool(["tasks", "8", "--next"], self.wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "2")
+
+    def test_tasks_json_from_worktree_reports_docs_root_and_relative_path(self):
+        self.seed_worktree_tasks()
+        r = run_tool(["tasks", "8"], self.wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(Path(data["docs_root"]).resolve(), self.wt.resolve())
+        by_n = {t["task"]: t for t in data["tasks"]}
+        self.assertEqual(by_n[2]["path"], "DOCs/PHASE8_x.tasks/task2.md")
+
+    def test_tasks_set_from_worktree_writes_worktree_file(self):
+        tdir = self.seed_worktree_tasks()
+        r = run_tool(["tasks", "8", "--set", "2=in-progress"], self.wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: in-progress", (tdir / "task2.md").read_text())
+        # 메인 체크아웃에는 같은 경로가 생기지 않는다
+        self.assertFalse((self.root / "DOCs" / "PHASE8_x.tasks").exists())
+
+    def test_tasks_from_main_cwd_without_docs_is_explicit_error(self):
+        self.seed_worktree_tasks()
+        r = run_tool(["tasks", "8"], self.root, self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("PHASE8_*.tasks", r.stderr)
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_tasks_from_worktree_falls_back_to_main_when_absent(self):
+        # 병합 후: 문서는 메인에만 있고 워크트리 브랜치에는 없다 — 메인 루트로 폴백해야 한다
+        self.init_registry()
+        tasks_dir = self.root / "DOCs" / "PHASE7_seed.tasks"
+        tasks_dir.mkdir(exist_ok=True)
+        (tasks_dir / "task1.md").write_text("---\ntask: 1\nstatus: pending\n---\n\n# Task 1: 메인\n")
+        wt = self.root / ".claude" / "worktrees" / "phase9-y"
+        self.git("worktree", "add", "-b", "feature/phase9-y", str(wt), "develop")
+        r = run_tool(["tasks", "7", "--next"], wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "1")
+        data = json.loads(run_tool(["tasks", "7"], wt, self.env).stdout)
+        self.assertEqual(Path(data["docs_root"]).resolve(), self.root.resolve())
+
+    # Phase 16 RED 2차 (리뷰 반려 대응 — 폴백 무신호 🔴 2건 + 진단 정보 손실 🟠 1건)
+    def test_fallback_to_main_is_announced_on_stderr(self):
+        # 폴백은 정상 동작이지만 조용해선 안 된다 — stdout(기계 판독)은 그대로,
+        # 어느 체크아웃에서 문서를 찾았는지는 stderr 로 알린다.
+        self.init_registry()
+        tasks_dir = self.root / "DOCs" / "PHASE7_seed.tasks"
+        tasks_dir.mkdir(exist_ok=True)
+        (tasks_dir / "task1.md").write_text("---\ntask: 1\nstatus: pending\n---\n\n# Task 1: 메인\n")
+        wt = self.root / ".claude" / "worktrees" / "phase9-y"
+        self.git("worktree", "add", "-b", "feature/phase9-y", str(wt), "develop")
+        r = run_tool(["tasks", "7", "--next"], wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "1")  # 기계 판독 계약 불변
+        self.assertIn(str(self.root.resolve()), r.stderr)
+
+    def test_set_reports_written_file_path(self):
+        # --set 은 어느 파일을 고쳤는지 밝혀야 한다 (폴백 시 다른 체크아웃을 고칠 수 있으므로)
+        tdir = self.seed_worktree_tasks()
+        r = run_tool(["tasks", "8", "--set", "2=in-progress"], self.wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(str((tdir / "task2.md").resolve()), r.stdout)
+
+    def test_set_on_fallback_announces_and_reports_main_path(self):
+        # 폴백 + --set 조합 (리뷰 지적 커버리지 갭): 워크트리 cwd 에서 --set 을 부르면
+        # 메인 체크아웃 파일을 고치게 된다 — 통지(stderr)와 실제 쓴 경로(stdout)가 둘 다 나와야 한다.
+        self.init_registry()
+        tasks_dir = self.root / "DOCs" / "PHASE7_seed.tasks"
+        tasks_dir.mkdir(exist_ok=True)
+        (tasks_dir / "task1.md").write_text("---\ntask: 1\nstatus: pending\n---\n\n# Task 1: 메인\n")
+        wt = self.root / ".claude" / "worktrees" / "phase9-w"
+        self.git("worktree", "add", "-b", "feature/phase9-w", str(wt), "develop")
+        r = run_tool(["tasks", "7", "--set", "1=in-progress"], wt, self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(str(self.root.resolve()), r.stderr)
+        self.assertIn(str((tasks_dir / "task1.md").resolve()), r.stdout)
+        self.assertIn("status: in-progress", (tasks_dir / "task1.md").read_text())
+
+    def test_missing_tasks_message_names_the_worktree_root_it_searched(self):
+        # 폴백 후 docs_root 를 root 로 덮어써 "탐색: X, X" 가 되면 어느 워크트리를
+        # 뒤졌는지 사라진다 — 실제로 탐색한 워크트리 루트가 메시지에 남아야 한다.
+        self.init_registry()
+        wt = self.root / ".claude" / "worktrees" / "phase9-z"
+        self.git("worktree", "add", "-b", "feature/phase9-z", str(wt), "develop")
+        r = run_tool(["tasks", "9"], wt, self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout.strip(), "")
+        self.assertIn(str(wt.resolve()), r.stderr)
+
+
+class RetryGuardTest(Base):
+    """Phase 17 RED (task 3a) — `retry-guard` 무변경 재시도 차단 (A2).
+
+    오케스트레이터 작성·동결 — 위임 수정 금지.
+    감독 상태 파일은 격리 XDG 레이아웃(`<XDG_STATE_HOME>/orchestrate/supervisor/<project>.json`)에
+    두고, 홈(`~/.claude`·`~/.local/state`)은 읽지도 쓰지도 않는다.
+    """
+
+    PROJECT = "proj"
+
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp.name) / "home"
+        self.xdg_state = Path(self.tmp.name) / "xdg-state"
+        self.state_file = (
+            self.xdg_state / "orchestrate" / "supervisor" / f"{self.PROJECT}.json"
+        )
+        self.state_file.parent.mkdir(parents=True)
+        self.home.mkdir()
+        self.env = {
+            **self.env,
+            "HOME": str(self.home),
+            "XDG_STATE_HOME": str(self.xdg_state),
+        }
+
+    def write_state(self, state):
+        self.state_file.write_text(json.dumps(state, ensure_ascii=False))
+
+    def read_state(self):
+        return json.loads(self.state_file.read_text())
+
+    def guard(self, *flags, phase="17", part="3"):
+        return run_tool(
+            ["retry-guard", phase, part, *flags, "--state", str(self.state_file)],
+            self.root, self.env,
+        )
+
+    def record(self):
+        r = self.guard("--record")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def test_check_blocks_when_worktree_is_unchanged_since_last_failure(self):
+        # 1) 직전 실패 시점과 스냅샷이 같으면 재spawn 금지 신호를 내야 한다.
+        self.write_state({"status": "running", "owner": {"pid": "1", "start_id": "x"}})
+        self.record()
+        state = self.read_state()
+        # 기록은 상태 파일을 통째로 갈아엎지 않는다 (supervisor-state.sh 경유 = 기존 키 보존).
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["owner"], {"pid": "1", "start_id": "x"})
+        recorded = state["last_failure"]["worktree_hash"]
+        self.assertRegex(recorded, r"^[0-9a-f]{64}$")
+        self.assertFalse(self.state_file.is_symlink())
+
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("retry_exhausted", r.stdout)
+
+    def test_check_passes_when_tracked_file_changed(self):
+        # 2) 추적 파일이 바뀌었으면 통과한다.
+        self.write_state({"status": "running"})
+        self.record()
+        (self.root / "a.txt").write_text("a changed\n")
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_check_passes_when_only_untracked_content_changed(self):
+        # 3) untracked 파일만 바뀌어도 통과한다. 파일 목록(`git status -z -uall`)과
+        #    추적 diff 가 동일한 채 **내용만** 바뀌는 경우까지 잡으려면 스냅샷이
+        #    untracked 파일 내용의 sha256 을 포함해야 한다.
+        self.write_state({"status": "running"})
+        untracked = self.root / "u.txt"
+        untracked.write_text("one\n")
+        self.record()
+        untracked.write_text("two\n")  # 이름·목록·추적 diff 는 그대로, 내용만 다르다
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        # 새 untracked 파일이 생긴 경우도 "변경 있음" 이다.
+        self.record()
+        (self.root / "v.txt").write_text("new\n")
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_check_passes_when_no_failure_recorded(self):
+        # 4) 첫 시도(직전 실패 기록 없음)는 통과한다. `--check` 는 기본 동작이다.
+        self.write_state({"status": "idle"})
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.guard()  # 플래그 생략 시 기본이 --check
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class RetryGuardHardeningTest(Base):
+    """Phase 17 RED 2차 (task 3b 리뷰 1라운드 반영) — 오케스트레이터 작성·동결.
+
+    1라운드에서 리뷰어 3인이 낸 🔴·🠠 중 테스트로 고정 가능한 것만 못박는다.
+    """
+
+    PROJECT = "proj"
+
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp.name) / "home"
+        self.home.mkdir()
+        self.xdg_state = Path(self.tmp.name) / "xdg-state"
+        self.state_file = (
+            self.xdg_state / "orchestrate" / "supervisor" / f"{self.PROJECT}.json"
+        )
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_text('{"status": "running"}')
+        self.env = {
+            **self.env,
+            "HOME": str(self.home),
+            "XDG_STATE_HOME": str(self.xdg_state),
+        }
+        self.sub = self.root / "sub"
+        self.sub.mkdir()
+        (self.sub / "s.txt").write_text("s\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "sub")
+
+    def read_state(self):
+        return json.loads(self.state_file.read_text())
+
+    def guard(self, *flags, cwd=None, phase="17", part="3", tool=None, timeout=60):
+        return subprocess.run(
+            [sys.executable, str(tool or TOOLS), "retry-guard", phase, part,
+             *flags, "--state", str(self.state_file)],
+            cwd=cwd or self.root, env=self.env, capture_output=True, text=True,
+            timeout=timeout,
+        )
+
+    def record(self, **kwargs):
+        r = self.guard("--record", **kwargs)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def test_record_works_through_symlinked_entrypoint(self):
+        # 🔴 문서화된 진입점은 심링크 `scripts/phase-tools.py` 다. 동반 스크립트를
+        # `__file__` 의 형제로 찾으면 `scripts/supervisor-state.sh` (없는 경로)를 가리켜
+        # --record 가 매번 크래시하고, 기록이 없으니 --check 는 늘 통과한다(fail-open).
+        link_dir = Path(self.tmp.name) / "scripts-link"
+        link_dir.mkdir()
+        entry = link_dir / "phase-tools.py"
+        entry.symlink_to(TOOLS)
+        r = self.guard("--record", tool=entry)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(self.read_state()["last_failure"]["worktree_hash"],
+                         r"^[0-9a-f]{64}$")
+        r = self.guard("--check", tool=entry)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+
+    def test_snapshot_is_independent_of_invocation_cwd(self):
+        # 🔴 스냅샷이 호출 cwd 에 의존하면(`git ls-files --others` 는 cwd 하위만
+        # cwd 상대 경로로 나열한다) 같은 워크트리인데도 해시가 달라져 무변경 재시도가 통과한다.
+        # 미추적 파일이 저장소 루트에 있어야 이 차이가 드러난다.
+        untracked = self.root / "top-untracked.txt"
+        untracked.write_text("top\n")
+        self.record(cwd=self.root)
+        r = self.guard("--check", cwd=self.sub)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+
+        # 서브디렉터리에서 실행해도 저장소 어디의 변경이든 보여야 한다.
+        untracked.write_text("top changed\n")
+        r = self.guard("--check", cwd=self.sub)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_check_of_another_part_is_not_blocked(self):
+        # 🟡 `<part>` 가 출력 문구에만 쓰이면 다른 파트의 첫 시도가 남의 실패 기록으로 막힌다.
+        self.record(part="3")
+        r = self.guard("--check", part="3")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        r = self.guard("--check", part="4")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.guard("--check", phase="18", part="3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_untracked_symlink_target_change_is_detected(self):
+        # 🠠 미추적 심링크를 경로만으로 해시하면 타깃 변경이 안 보여 정당한 재시도가 막힌다.
+        link = self.root / "dangling-link"
+        link.symlink_to("target-one")  # 깨진 링크 — readlink 만 스냅샷에 반영된다
+        self.record()
+        link.unlink()
+        link.symlink_to("target-two")
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    # --- 리뷰 2라운드 반영 (🔴 1건 + 🟠 1건) ---
+
+    def test_legacy_last_failure_without_scope_is_still_enforced(self):
+        # 🔴 `phase`·`part` 키가 없는 기록(이전 버전·수기 편집)을 "스코프 불일치" 로 보고
+        # 조용히 통과시키면, 정말 무변경인 재시도가 아무 흔적 없이 허용된다(fail-open).
+        # 스코프 필드가 없는 기록은 하위호환으로 해시 비교를 계속 수행해야 한다.
+        self.record()
+        state = self.read_state()
+        state["last_failure"] = {"worktree_hash": state["last_failure"]["worktree_hash"]}
+        self.state_file.write_text(json.dumps(state, ensure_ascii=False))
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertTrue(r.stderr.strip(), "스코프 없는 기록을 쓸 때는 통지해야 한다")
+
+    def test_scope_mismatch_is_announced_on_stderr(self):
+        # 🔴 스코프 불일치로 통과시키는 것은 정상 동작이지만 조용해선 안 된다 —
+        # 호출부가 표기를 어긋나게 넘겨 가드가 매번 우회되는 상황을 로그로 구분할 수 있어야 한다.
+        self.record(part="3")
+        r = self.guard("--check", part="4")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stderr.strip(), "스코프 불일치 통과는 stderr 로 알려야 한다")
+
+    def test_invalid_phase_argument_does_not_use_the_missing_state_code(self):
+        # 🟠 argparse 자체 오류는 exit 2 다 — 확정된 "상태 파일 없음 = 2" 와 겹치면
+        # 호출부가 CLI 사용 버그를 "기록 없음, 재시도해도 됨" 으로 오분류한다.
+        r = self.guard("--check", phase="17a")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertTrue(r.stderr.strip())
+
+    def test_missing_state_file_exits_2(self):
+        # 파트 17-2 가 확정한 종료코드 표와 맞춘다: 상태 파일 없음 = 2
+        # (1=기타 오류·3=retry_exhausted 와 섞이면 호출부가 구분할 수 없다).
+        self.state_file.unlink()
+        r = self.guard("--check")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        r = self.guard("--record")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

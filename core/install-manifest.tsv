@@ -1,0 +1,13 @@
+# harness	mode	src(KIT_DIR 상대)	dst($HOME 상대)
+any	file	core/onboard/ONBOARD-PROCEDURE.md	.config/orchestrate/ONBOARD-PROCEDURE.md
+any	file	core/opencode/opencode.json	.config/opencode/opencode.json
+any	file	core/opencode/model-doctor.sh	.config/opencode/model-doctor.sh
+any	file	core/opencode/provider-models.json	.config/opencode/provider-models.json
+any	seed	core/opencode/secrets.env.example	.config/opencode/secrets.env
+any	file	core/scripts/skillpack-update-check.sh	.local/bin/skillpack-update-check.sh
+any	file	core/scripts/supervisor-state.sh	.local/bin/supervisor-state.sh
+any	seed	core/skillpack/packs.conf.example	.config/skillpack-update/packs.conf
+claude	tree	adapters/claude/global/skills	.claude/skills
+claude	file	core/supervisor/PROCEDURE.md	.claude/supervisor/PROCEDURE.md
+claude	tree	adapters/claude/global/commands	.claude/commands
+codex	tree	adapters/codex/global/prompts	.codex/prompts

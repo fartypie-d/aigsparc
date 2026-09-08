@@ -1,10 +1,18 @@
+---
+date: 2026-08-15
+kind: plan
+domain: docs, scripts
+status: draft
+summary: DOCs/ → 소문자 docs/ 통일 실행 계획 — 미착수, 페이즈 착수 시 근거 문서
+---
+
 # 실행 계획 — `DOCs/` → 소문자 `docs/` 통일
 
 > 상태: **미착수 (계획 문서 전용)**. 작성 2026-08-15, Phase 7 마감 직후.
 > 사용자 지시로 **실행하지 않고 문서만** 남긴다 — 나중에 저장소 루트에서 직접 수행하기 위한 것.
 > 페이즈로 진행하려면 `bash scripts/phase-claim.sh docs-lowercase` 로 번호를 발급받고
-> 이 문서를 그 지시서의 근거로 삼는다. (이 파일은 `docs-index.py` 의 phase 패턴에
-> 걸리지 않는 이름이라 `INDEX.md` 에 페이즈 행으로 나오지 않는다.)
+> 이 문서를 그 지시서의 근거로 삼는다. (Phase 14부터 `PLAN*.md` 도 `docs-index.py` 가
+> 인덱싱한다 — `INDEX.md` 에 kind=plan 행으로 나온다.)
 
 ## 왜 하는가 — 취향이 아니라 이식성 결함
 

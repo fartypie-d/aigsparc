@@ -9,8 +9,10 @@ in only at two approval gates.
   Implementation is done by opencode agents via TDD.
 - **Two gates** — no code changes before GATE 1 (plan approval), and no phase ends without
   GATE 2 (integration approval).
-- **Central model policy** — the delegation model is decided by the `model-policy.json`
-  fallback chain; when a limit is hit it automatically moves to the next model.
+- **Central model policy** — the delegation model is decided by the project
+  `.claude/model-policy.json` when present, otherwise by the host
+  `~/.config/opencode/model-policy.json`; when a limit is hit it automatically moves to the next
+  model.
 
 > A live interactive version (with diagram PNG downloads) is maintained as a separate
 > document; this file is the in-repo port of that content.
@@ -141,11 +143,54 @@ the default chain on failure).
 
 ## 05 The model is decided by central policy
 
-run-delegation.sh injects the tier chain from `~/.config/opencode/model-policy.json` via
-`-m`. This file is a **generated artifact** — the source of truth is the kit's
+`run-delegation.sh` first resolves `<git-top-level>/.claude/model-policy.json` (or
+`<caller-cwd>/.claude/model-policy.json` outside a Git repository), then falls back to
+`~/.config/opencode/model-policy.json` and injects the selected tier chain via `-m`. The selected policy is logged as
+`POLICY_USED=<path> (project|host)` in stdout and the `.wrapper` log. If neither candidate
+exists, it exits 64 and reports both paths. Quota/credit failures — including `status 402`,
+`insufficient credits`, `credit balance is too low`, and `usage limit reached` — and hangs trigger
+the model fallback chain.
+
+The host file is a **generated artifact** — its source of truth is the kit's
 `core/opencode/provider-models.json` mapping table, `gen-policy.sh` builds the chain from the
 credentials on hand (subscription OAuth · API keys), and `model-doctor.sh` verifies it live
 with `opencode models` — preventing a typo'd model ID from silently burning fallbacks.
+`model-doctor.sh` defaults to the host policy; verify a project policy with
+`--policy .claude/model-policy.json`.
+
+The project policy is tracked and committed with the repository, so anyone who can change
+`.claude/model-policy.json` can influence delegation model selection. Review its diff at the same
+level as code changes. When invoking delegation from a submodule or nested repository, run it
+from the intended repository root: `git rev-parse --show-toplevel` otherwise points at the nested
+root and cannot find the outer project's `.claude/`.
+
+### Diagnostic boundaries
+
+These three tools cover different layers. `kit-doctor.sh` does **not** check models,
+authentication, hooks, or containers; running it does not confirm that everything is healthy.
+
+| Tool | What it checks | Call |
+|---|---|---|
+| `kit-doctor.sh` | Required/optional tool presence, global asset presence, and drift from the kit source | `./install.sh --doctor` or `bash scripts/kit-doctor.sh` |
+| `model-doctor.sh` | Model policy, fallback chain, and provider authentication (defaults to host policy) | `~/.config/opencode/model-doctor.sh` |
+| `hook-selfcheck.sh` | Project hook (guard) survival | `bash scripts/hook-selfcheck.sh` |
+
+To add only absent assets, use `./install.sh --doctor --add-missing` or `bash scripts/kit-doctor.sh --add-missing`. It does **not** overwrite
+existing files, even if their contents differ. Rerun `./install.sh` to update drift.
+
+`install.sh` allows `--doctor` only with `--claude`, `--codex`, or `--add-missing`; with `--containers=`, `--providers=`, `--plan=`, or an ECC language positional argument, it rejects the request before diagnosis to prevent users from mistaking it for a completed installation.
+
+The doctor exit code is a CI gate signal:
+
+| Exit code | Meaning |
+|---|---|
+| `0` | No FAIL (WARN and DRIFT may still be present) |
+| `1` | A FAIL exists (missing required tool, missing checked asset, containment violation, etc.) |
+| `64` | Usage error (unknown option or an invalid combination of `--doctor` and installation options) |
+
+Do not set the test-only hook `INSTALL_PARSE_ONLY=1` in the CI health check:
+`INSTALL_PARSE_ONLY=1 ./install.sh --doctor --claude` prints parse results and exits `0` without
+running the actual diagnosis, so the health check can silently pass.
 
 | Tier | Chain (example — generated from credentials) |
 |---|---|
@@ -234,7 +279,8 @@ orchestration.
 - **Improvements flow into the kit** — wherever you fix a skill or script, reflect it in the
   kit → push → re-run `./install.sh` on other machines (idempotent). Fixing only locally gets
   reverted at the next install. Exceptions: the container's source of truth is the dev host,
-  and model-policy's is the mapping table.
+  and the host model-policy's is the mapping table; a project `.claude/model-policy.json` is the
+  repository-scoped override.
 
 ---
 

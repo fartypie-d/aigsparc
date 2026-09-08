@@ -12,9 +12,9 @@ frontmatter 규약 (신규 문서 권장):
     ---
     phase: 119
     date: 2026-07-24
-    kind: review            # task | review | investigation
+    kind: review            # task | review | investigation | design | plan
     domain: config, infra   # 콤마 구분
-    status: done            # done | in-progress | superseded
+    status: done            # done | in-progress | superseded | decided | draft
     commits: 346172d        # 콤마 구분
     summary: 한 줄 요약
     ---
@@ -28,9 +28,26 @@ from datetime import date
 from pathlib import Path
 
 
+# 규약: __file__ 의 심링크를 realpath 로 푼 뒤 프로젝트 루트를 판정한다.
+# 부모가 core 이고 그 부모(grandparent) 에 킷 마커(core/install-manifest.tsv)
+# 가 있으면 한 단계 더 올라간다(=킷 저장소 배치).
+# 아니면 부모가 곧 프로젝트 루트다(=설치된 프로젝트 배치, <proj>/scripts/X).
+def _resolve_project_root() -> Path:
+    """__file__ 심링크를 실경로로 풀어 프로젝트 루트를 반환한다."""
+    script_real = Path(os.path.realpath(__file__))
+    script_dir = script_real.parent
+    parent = script_dir.parent
+
+    if parent.name == "core":
+        grandparent = parent.parent
+        if (grandparent / "core" / "install-manifest.tsv").is_file():
+            return grandparent
+    return parent
+
+
 def default_docs_dir() -> Path:
     """문서 내용까지 확인해 기본 문서 경로를 계산한다."""
-    root = Path(os.path.abspath(__file__)).parent.parent
+    root = _resolve_project_root()
     docs_phases = root / "docs" / "phases"
     legacy_docs = root / "DOCs"
     if docs_phases.is_dir() and any(
@@ -50,6 +67,8 @@ INCLUDE_PATTERNS = (
     re.compile(r".*INVESTIGATION.*\.md$"),
     re.compile(r".*REVIEW.*\.md$", re.IGNORECASE),
     re.compile(r"^CASE_STUDY.*\.md$"),
+    re.compile(r"^DESIGN([_.-].*)?\.md$"),
+    re.compile(r"^PLAN([_.-].*)?\.md$"),
 )
 
 
@@ -116,6 +135,10 @@ def extract(path: Path, docs_dir: Path) -> dict[str, str]:
             kind = "review"
         elif "INVESTIGATION" in name:
             kind = "investigation"
+        elif name.startswith(("DESIGN_", "DESIGN.", "DESIGN-")):
+            kind = "design"
+        elif name.startswith(("PLAN_", "PLAN.", "PLAN-")):
+            kind = "plan"
         elif name.startswith(("CURRENT_TASK", "AGENT_PROMPTS")):
             kind = "task"
         else:
@@ -175,9 +198,9 @@ def main(argv=None) -> int:
 
     rows.sort(key=sort_key, reverse=True)
 
-    root = Path(os.path.abspath(__file__)).parent.parent
+    root = _resolve_project_root()
     try:
-        docs_label = docs_dir.resolve().relative_to(root).as_posix()
+        docs_label = docs_dir.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         docs_label = str(docs_dir)
 

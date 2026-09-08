@@ -1,0 +1,13 @@
+# skillpack-update-check.sh 점검 대상 목록 (탭 구분, # 주석)
+#
+# plugin	<표시명>	<plugin@marketplace>	<github owner/repo>
+#   → ~/.claude/plugins/installed_plugins.json 의 설치 버전과 업스트림 최신
+#     릴리스(없으면 기본 브랜치 HEAD 커밋)를 비교한다. 미설치면 건너뛴다.
+#
+# repo	<표시명>	<로컬 경로>	<업스트림 ref>
+#   → git fetch 후 behind 커밋 수를 센다. 경로는 ~/ 시작 가능. 없으면 건너뛴다.
+#
+# 감지만 하고 자동 적용하지 않는다. 결과: ~/.local/state/skillpack-update/NOTICE.md
+plugin	superpowers	superpowers@superpowers-dev	obra/superpowers
+repo	ecc	~/everything-claude-code	origin/main
+# plugin	everything-evenhub	everything-evenhub@everything-evenhub	even-realities/everything-evenhub

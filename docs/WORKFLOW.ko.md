@@ -7,8 +7,9 @@
 - **역할 분리** — 감독 하네스는 인터뷰·지시서·리뷰만. 구현은 opencode 에이전트가 TDD로 수행한다.
 - **게이트 2개** — GATE 1(계획 승인) 전에는 코드가 바뀌지 않고, GATE 2(통합 승인) 없이 페이즈가
   끝나지 않는다.
-- **모델 중앙 정책** — 위임 모델은 `model-policy.json` 폴백 체인이 결정 — 한도에 걸리면 자동으로
-  다음 모델.
+- **모델 중앙 정책** — 프로젝트에 `.claude/model-policy.json`이 있으면 그것이, 없으면 호스트의
+  `~/.config/opencode/model-policy.json`이 위임 모델을 결정한다 — 한도에 걸리면 자동으로 다음
+  모델.
 
 > 라이브 인터랙티브 버전(다이어그램 PNG 내려받기 지원)은 별도 문서로 관리되며, 이 파일은 그
 > 내용의 저장소 이식본이다.
@@ -119,10 +120,53 @@ PID 완료 대기 · 모델 폴백 체인 · `MODEL_USED=` 실측 출력. exit �
 
 ## 05 모델은 중앙 정책이 정한다
 
-`~/.config/opencode/model-policy.json`의 tier 체인을 run-delegation.sh가 `-m`으로 주입한다. 이
-파일은 **생성물**이다 — 원본은 킷의 `core/opencode/provider-models.json` 매핑표고, `gen-policy.sh`
-가 가진 자격증명(구독 OAuth·API 키)을 기준으로 체인을 만들고 `model-doctor.sh`가
-`opencode models`로 실측 검증한다 — 오타 난 모델 ID가 조용히 폴백만 소모하는 것을 막는다.
+run-delegation.sh는 Git 저장소 최상위의 `.claude/model-policy.json`을 먼저 찾고
+(`git rev-parse --show-toplevel` 기준), Git 저장소가 아니면 호출 cwd의
+`.claude/model-policy.json`을 찾는다. 없으면 `~/.config/opencode/model-policy.json`으로
+폴백하고 tier 체인을 `-m`으로 주입한다. 실제 사용 정책은 stdout과 `.wrapper` 로그에
+`POLICY_USED=<경로> (project|host)`로 기록된다. 두 후보가 모두 없으면 exit 64이고 두 경로를
+모두 오류에 표시한다. `status 402`, `insufficient credits`, `credit balance is too low`,
+`usage limit reached`를 포함한 크레딧·한도 실패와 hang에는 모델 폴백이 걸린다.
+
+호스트 파일은 **생성물**이다 — 원본은 킷의 `core/opencode/provider-models.json` 매핑표고,
+`gen-policy.sh`가 가진 자격증명(구독 OAuth·API 키)을 기준으로 체인을 만들며
+`model-doctor.sh`가 `opencode models`로 실측 검증한다 — 오타 난 모델 ID가 조용히 폴백만
+소모하는 것을 막는다. `model-doctor.sh`의 기본값은 호스트 정책이므로 프로젝트 정책은
+`--policy .claude/model-policy.json`을 넘겨 검증한다.
+
+프로젝트 정책은 저장소에 추적·커밋되므로 `.claude/model-policy.json`을 바꿀 수 있는 사람이
+위임 모델 선택을 좌우한다. PR에서는 이 파일의 변경분을 코드 diff와 같은 눈높이로 리뷰한다.
+서브모듈·중첩 저장소 안에서 위임을 호출할 때는 의도한 저장소 루트에서 실행한다.
+그렇지 않으면 `git rev-parse --show-toplevel`이 중첩 저장소 루트를 가리켜 바깥 프로젝트의
+`.claude/`를 찾지 못한다.
+
+### 진단 도구별 점검 범위
+
+세 도구는 서로 다른 계층을 점검한다. `kit-doctor.sh`는 **모델·인증·훅·컨테이너를 보지
+않으므로**, 이 도구를 실행했다고 해서 모든 상태가 정상이라고 확인되는 것은 아니다.
+
+| 도구 | 무엇을 보는가 | 호출 |
+|---|---|---|
+| `kit-doctor.sh` | 필수·선택 도구 유무, 전역 자산 존재·킷 원본 대비 drift | `./install.sh --doctor` 또는 `bash scripts/kit-doctor.sh` |
+| `model-doctor.sh` | 모델 정책·폴백 체인·프로바이더 인증 (기본값은 호스트 정책) | `~/.config/opencode/model-doctor.sh` |
+| `hook-selfcheck.sh` | 프로젝트 훅(가드) 생존 | `bash scripts/hook-selfcheck.sh` |
+
+없는 자산만 추가하려면 `./install.sh --doctor --add-missing` 또는 `bash scripts/kit-doctor.sh --add-missing`을 사용한다. 내용이 달라도
+기존 파일은 덮어쓰지 않는다. drift 갱신은 `./install.sh`를 다시 실행한다.
+
+`install.sh`는 `--claude`·`--codex`·`--add-missing`과 함께 쓸 때만 `--doctor`를 허용하며, `--containers=`·`--providers=`·`--plan=` 또는 ECC 언어 위치 인자와 함께 오면 진단을 수행하지 않고 거부한다. 설치가 됐다고 오인하는 것을 막기 위해서다.
+
+doctor의 종료 코드는 CI 게이트 신호다.
+
+| 종료 코드 | 의미 |
+|---|---|
+| `0` | FAIL 없음 (WARN·DRIFT는 있어도 0) |
+| `1` | FAIL 있음 (필수 도구 부재·점검 대상 자산 부재·경로 봉쇄 위반 등) |
+| `64` | 사용법 오류 (알 수 없는 옵션, 또는 `--doctor`와 설치 옵션의 잘못된 조합) |
+
+CI 헬스체크에는 테스트 전용 훅인 `INSTALL_PARSE_ONLY=1`을 함께 두지 않는다:
+`INSTALL_PARSE_ONLY=1 ./install.sh --doctor --claude`는 실제 진단 없이 파싱 결과만 출력하고
+`exit 0`이므로, 헬스체크가 조용히 성공할 수 있다.
 
 | 티어 | 체인 (예시 — 자격증명에 따라 생성됨) |
 |---|---|
@@ -200,7 +244,8 @@ adapters만 갈아 끼운다.
   commit·push, docker 조작, sudo, `rm -rf`를 차단한다. 커밋 권한은 게이트를 통과한 절차에만 있다.
 - **개선은 킷으로 흐른다** — 스킬·스크립트를 어느 머신에서 고치든 킷에 반영 → push → 다른
   머신에서 `./install.sh` 재실행(멱등). 로컬만 고치면 다음 설치 때 되돌아간다. 예외: 컨테이너는
-  개발 호스트가, model-policy는 매핑표가 원본이다.
+  개발 호스트가, 호스트 model-policy는 매핑표가 원본이다. 프로젝트
+  `.claude/model-policy.json`은 저장소 범위의 우선 정책이다.
 
 ---
 

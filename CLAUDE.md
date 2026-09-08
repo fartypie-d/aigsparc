@@ -94,9 +94,56 @@ bash scripts/hook-selfcheck.sh             # 훅 자가진단 (HOOK_SELFCHECK_PA
   안에서 init 하면 phase-close 가 크래시한다(함정 7) — PITFALLS 24 (2026-08-14).
 - **로컬 main 미푸시 상태에서 `phase-claim.sh` 를 실행하지 말 것** — 낡은 origin/main 에서
   분기돼 페이즈 도중 리베이스가 필요해진다. claim 직후 `git merge-base HEAD main` 확인 (PITFALLS 25, 2026-08-17).
+- **리뷰어 서브에이전트에게 워크트리를 줄 때는 읽기 전용 git 명령만 허용할 것** — 리뷰어가
+  `git stash` 로 오케스트레이터의 미커밋 동결 테스트를 흔든 실측 사고가 있다. 리뷰 호출 전에
+  작업을 커밋해 트리를 비우고, 리뷰 후 `git stash list` 로 잔재를 확인한다 (PITFALLS 26, 2026-08-17).
+- **위임 산출물과 오케스트레이터의 `tests/` 수정을 한 커밋에 묶지 말 것** — 리뷰어가
+  "위임이 동결 테스트를 무단 수정했다"는 🔴 오진을 낸다 (PITFALLS 27, 2026-08-17).
+- **`unittest -k` 에 불리언 식(`"A or B"`)을 쓰지 말 것** — 0건 매칭으로 `NO TESTS RAN` + exit 0,
+  즉 거짓 그린이 된다. 패턴은 하나씩 주고 `Ran N tests` 의 N 을 확인한다 (PITFALLS 28, 2026-08-17).
+- **출력 블록에 필드를 추가하기 전에 정확일치 단정을 grep 할 것** —
+  `grep -rn 'assertEqual(\s*result.stdout' tests/`. PITFALLS 23 의 출력 문자열 버전이며
+  `DOCTOR=0` 한 줄 추가로 순수 회귀가 났다 (PITFALLS 29, 2026-08-17).
+- **GNU `cp` 는 끊어진 심링크 쓰기를 자체 거부한다** — "밖에 파일이 생겼는가"로는 심링크 가드를
+  증명할 수 없다(가드를 지워도 Linux 에선 유출 없음). 보고 형태를 단정하고, 변이 검증은
+  **부모가 심링크인 경우**로 하라 (PITFALLS 30, 2026-08-17).
+- **워크트리에서 만든 프로젝트 에이전트는 그 세션에서 호출되지 않는다** — 레지스트리가
+  메인 체크아웃의 `.claude/agents/` 를 보므로 `Agent type not found` 가 난다. 병합 후 또는 새
+  세션에서 첫 가동하고, 급하면 `general-purpose` 에 정의를 인라인해 대행 (PITFALLS 31, 2026-08-19).
+- **동결 사본(함정 13)을 만들 때 `opencode-serve-ctl.sh` 도 같이 복사할 것** — 안 하면
+  `SCRIPT_DIR` 이 어긋나 serve attach 를 잃고 standalone 전역 락으로 떨어진다. 부수 효과로
+  그 페이즈의 개선은 그 페이즈 자신의 위임에 적용되지 않는다 (PITFALLS 32, 2026-08-19).
+- **~~`phase-tools.py tasks` 를 진행 중 페이즈에 쓰지 말 것~~ (해소, 2026-09-02 Phase 16)** —
+  `cmd_tasks` 가 워크트리 cwd 의 문서를 먼저 보고 없을 때만 메인으로 폴백(stderr 통지)하므로
+  진행 중에도 조회·`--set` 이 동작한다 (PITFALLS 33 갱신).
+- **`tasks` 는 `task<숫자>.md` 만 인식한다** — `task1a.md`·`task2b.md` 같은 접미사 task 는
+  조회 JSON 에서 통째로 빠지고 `--set 1a=done` 은 거부된다. 접미사를 쓸 거면 상태 전이는
+  frontmatter 직접 편집이고, `complete` 필드를 신뢰하지 말 것 (PITFALLS 39, 2026-09-02).
+- **변이 검증 사본에서 `.orchestrate` 를 제외할 것** — 제외하지 않으면 사본이 이전 사본을 품어
+  재귀 폭발한다(Phase 13 실측 61GB·372만 파일). `phase-close` 의 worktree remove 가 타임아웃으로
+  죽는다. `rsync -a --exclude .orchestrate --exclude .git ./ .orchestrate/mut<task>/` (PITFALLS 34, 2026-08-19).
+- **동결 테스트를 파일 끝에 append 하면 `unittest.main()` 가드 뒤로 간다** — discover 로는 돌지만
+  파일 직접 실행 시 그 클래스들이 조용히 누락된다(실패 아님, 건수만 줄어듦). append 후 가드를
+  파일 끝으로 옮기고 건수를 확인할 것 (PITFALLS 35, 2026-09-01).
+- **동결 픽스처에 실제 마커를 전부 넣을 것** — 빠뜨리면 올바른 구현이 오히려 실패하고 약한 추론이
+  통과해, 리뷰 🔴 의 원인이 위임이 아니라 오케스트레이터의 계약이 된다 (PITFALLS 36, 2026-09-01).
+- **서브에이전트를 `sleep` 폴링으로 기다리지 말 것** — 완료 알림을 소비하지 못한 채 세션이
+  끊기면 리뷰 결과가 고아가 된다. 띄우고 턴을 끝내면 하네스가 깨운다. 이미 고아가 됐다면
+  트랜스크립트의 `type: queue-operation` 에 `<result>` 전문이 남아 회수 가능 (PITFALLS 37, 2026-09-01).
+- **`session-cost.py` 의 기준은 cwd 가 아니라 메인 체크아웃이다** — Phase 16 이후 `--project`
+  미지정 시 `git rev-parse --git-common-dir` 의 부모 슬러그를 쓰므로 **워크트리에서 실행해도
+  메인 체크아웃 세션은 정상 집계된다**(구 함정 해소). 다만 **세션 자체가 워크트리에서
+  시작·이동한 경우**는 여전히 못 찾는다 — 슬러그가 `.` 를 `-` 로 바꾸지 않기 때문.
+  그때는 `--project /<repo>/-claude/worktrees/<디렉터리>` 처럼 **점 자리에 `-` 를 넣은 유사 경로**를
+  주면 슬러그가 맞아떨어진다(2026-09-02 실측). `importlib` + `collect([jsonl 경로])` 도 유효
+  (PITFALLS 38, 2026-09-01/갱신 2026-09-02).
 - **`__PROJECT__` 를 저장소 전역에서 일괄 치환하지 말 것** — `core/project-template/`·`docs/plans/`
   에는 플레이스홀더가 정당하게 존재한다. stamp 치환 범위를 넓히면 템플릿 원본이 클로버된다
   (2026-08-08 도그푸딩 실측 사고 — lib/stamp.sh 가 복사분만 치환하는 이유).
+- **문서화된 심링크 진입점으로 동결 테스트를 돌릴 것** — 원본 직접 실행은 `retry-guard` fail-open을 놓친다 (PITFALLS 40, 2026-09-02).
+- **위임 중 전체 스위트의 실패를 회귀 기준선으로 삼지 말 것** — 종료 후 오케스트레이터가 판정한다 (PITFALLS 41, 2026-09-02).
+- **RED 작성 직후 실제 FAIL을 눈으로 확인할 것** — 이미 통과하는 테스트는 함정이 된다 (PITFALLS 42, 2026-09-02).
+- **`retry-guard` 호출부에서 zero-padding을 금지할 것** — `phase`·`part` 문자열 비교가 가드를 fail-open시킨다 (PITFALLS 43, 2026-09-02).
 
 ## 주의
 

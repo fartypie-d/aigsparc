@@ -77,7 +77,7 @@ cd aigsprac
 flowchart LR
     U[개발자] --> S[감독 하네스<br/>Claude / Codex]
     S -->|계획·지시서| RD[run-delegation.sh]
-    RD -->|model-policy.json<br/>tier 체인 -m 주입| OC[opencode 위임 에이전트]
+    RD -->|project/host model-policy.json<br/>tier 체인 -m 주입| OC[opencode 위임 에이전트]
     OC -->|1순위| GPT[openai · GPT]
     OC -->|폴백| XAI[xai · Grok]
     OC -->|폴백| QW[qwen · Qwen]
@@ -89,9 +89,48 @@ flowchart LR
 
 - **감독자는 구현하지 않는다** — 소스는 `run-delegation.sh` 로 opencode 에 위임하고 리뷰어로
   검수한다. Claude 는 ECC 리뷰어 서브에이전트, Codex 는 `codex-review.sh`.
-- **모델은 중앙 정책** — `~/.config/opencode/model-policy.json` 의 tier 체인을 run-delegation.sh 가
-  `-m` 으로 주입하고 한도·무응답 시 자동 폴백한다. 체인은 `gen-policy.sh` 가 생성하고
-  `model-doctor.sh` 가 실측 검증한다 (오타 난 모델 ID 가 조용히 폴백만 소모하는 것을 막는다).
+- **모델은 프로젝트 우선 중앙 정책으로 배정한다** — `run-delegation.sh` 는 먼저
+  `<git 최상위>/.claude/model-policy.json` 을 찾고 (Git 저장소 밖이면 `<호출 cwd>/.claude/model-policy.json`),
+  없을 때 `~/.config/opencode/model-policy.json` 으로 폴백한다. 선택한 tier 체인을 `-m` 으로 주입하고
+  `POLICY_USED=<경로> (project|host)` 를 stdout 과 `.wrapper` 로그에 기록한다. 한도·무응답과
+  `status 402`, `insufficient credits`, `credit balance is too low`, `usage limit reached`를 포함한
+  크레딧 오류 시 자동 폴백한다. 체인은 `gen-policy.sh` 가 생성하고 `model-doctor.sh` 가 실측 검증한다
+  (오타 난 모델 ID 가 조용히 폴백만 소모하는 것을 막는다). 두 정책 파일이 모두 없으면 exit 64로
+  종료하며 두 후보 경로를 모두 오류에 표시한다. `model-doctor.sh` 기본값은 host 정책이므로 프로젝트
+  정책은 `--policy .claude/model-policy.json` 을 넘겨 검증한다.
+
+  프로젝트 정책은 저장소에 추적·커밋되므로 `.claude/model-policy.json` 을 바꿀 수 있는 사람이
+  위임 모델 선택에 영향을 줄 수 있다. 따라서 PR에서 그 파일의 diff도 코드 변경과 같은 눈높이로
+  검토한다. 서브모듈이나 중첩 저장소에서 위임을 호출할 때는 의도한 저장소 루트에서 실행해야 한다.
+  그렇지 않으면 `git rev-parse --show-toplevel` 이 중첩 루트를 가리켜 바깥 프로젝트의 `.claude/`를
+  찾지 못한다.
+
+### 진단 도구별 점검 범위
+
+세 진단 도구는 서로 다른 경계를 점검한다. `kit-doctor.sh`는 **모델·인증·훅·컨테이너를
+보지 않으므로**, 이 도구를 실행했다고 해서 모든 상태가 정상이라고 볼 수 없다.
+
+| 도구 | 무엇을 보는가 | 호출 |
+|---|---|---|
+| `kit-doctor.sh` | 필수·선택 도구 유무, 전역 자산 존재·킷 원본 대비 drift | `./install.sh --doctor` 또는 `bash scripts/kit-doctor.sh` |
+| `model-doctor.sh` | 모델 정책·폴백 체인·프로바이더 인증 | `~/.config/opencode/model-doctor.sh` |
+| `hook-selfcheck.sh` | 프로젝트 훅(가드) 생존 | `bash scripts/hook-selfcheck.sh` |
+
+부재한 킷 자산만 채우려면 `./install.sh --doctor --add-missing` 또는 `bash scripts/kit-doctor.sh --add-missing`을 실행한다. 내용이 달라도 기존 파일은 덮어쓰지 않는다. drift를 갱신하려면 `./install.sh`를 다시 실행한다.
+
+`install.sh`는 `--claude`·`--codex`·`--add-missing`과 함께 쓸 때만 `--doctor`를 허용하며, `--containers=`·`--providers=`·`--plan=` 또는 ECC 언어 위치 인자와 함께 오면 진단을 수행하지 않고 거부한다. 설치가 됐다고 오인하는 것을 막기 위해서다.
+
+doctor의 종료 코드는 CI 게이트 신호다.
+
+| 종료 코드 | 의미 |
+|---|---|
+| `0` | FAIL 없음 (WARN·DRIFT는 있어도 0) |
+| `1` | FAIL 있음 (필수 도구 부재·점검 대상 자산 부재·경로 봉쇄 위반 등) |
+| `64` | 사용법 오류 (알 수 없는 옵션, 또는 `--doctor`와 설치 옵션의 잘못된 조합) |
+
+CI 헬스체크에 테스트 전용 훅인 `INSTALL_PARSE_ONLY=1`을 함께 두지 않는다:
+`INSTALL_PARSE_ONLY=1 ./install.sh --doctor --claude`는 실제 진단 없이 파싱 결과만 출력하고
+`exit 0`이므로, CI 헬스체크가 조용히 성공할 수 있다.
 - **병렬 위임은 구조적으로 안전하다** — `opencode serve` 데몬(`opencode-serve-ctl.sh` 로 관리)이
   있으면 위임이 서버에 attach 되어 **프로젝트별 락**으로 직렬화된다 — 다른 프로젝트는 병렬,
   같은 프로젝트는 직렬. 서버가 없으면 전역 락의 standalone 모드로 폴백한다 (락 없는 동시
@@ -127,6 +166,7 @@ flowchart LR
 | `lib/stamp.sh` | 두 진입 스크립트가 공유하는 스캐폴드 함수 |
 | `core/scripts/` | 하네스 무관 스크립트 — `run-delegation.sh`, `phase-tools.py` 등 |
 | `core/opencode/` | 프로바이더 매핑표·체인 생성기·`model-doctor.sh`·시드 프로파일 |
+| `core/skillpack/` | 스킬 팩 업데이트 감지 설정 시드 (`skillpack-update-check.sh` 가 소비) |
 | `core/onboard/` | `/orchestrate-onboard` 절차 본문 (단일 소스) |
 | `core/project-template/` | 로스터·에이전트 규격·문서 체계 (하네스 무관) |
 | `adapters/claude/` | 전역 스킬 + 프로젝트 훅·settings·CLAUDE.md·요금제 프로파일 |
@@ -244,7 +284,10 @@ frontmatter 의 `model:` 로만 한다 (`CLAUDE_CODE_SUBAGENT_MODEL` 은 리뷰�
 - **예외 — 브라우저 컨테이너는 별도 저장소다.** 개발 호스트의 컨테이너를 먼저 고치고
   [insane-cloak](https://github.com/fartypie-d/insane-cloak) 저장소에 반영한 뒤,
   키트는 `containers/browser` 서브모듈 포인터만 갱신한다.
-- **예외 — model-policy 는 생성물이다.** 원본은 `core/opencode/provider-models.json` 매핑표다.
+- **예외 — model-policy 는 두 스코프다.** 커밋된 프로젝트
+  `.claude/model-policy.json` 을 우선 사용하고, 없으면 생성된 host 정책
+  `~/.config/opencode/model-policy.json` 을 사용한다. host 정책의 원본은 여전히
+  `core/opencode/provider-models.json` 매핑표다.
 - 포함하지 않는 것: 비밀(secrets.env), 구독 OAuth(머신별 로그인), 메모리·프로젝트 데이터.
 
 ## 테스트

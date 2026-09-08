@@ -15,6 +15,7 @@ case "$ACTION" in ensure|status|start|stop|sessions|session|create|abort) ;; *) 
 
 # 테스트 및 격리 실행에는 아래 환경 변수로 실제 사용자 경로를 대체할 수 있다.
 ENV_FILE="${OPENCODE_SERVE_ENV_FILE:-$HOME/.config/opencode/serve.env}"
+SECRETS_FILE="${OPENCODE_SECRETS_ENV_FILE:-$HOME/.config/opencode/secrets.env}"
 STATE_DIR="${OPENCODE_SERVE_STATE_DIR:-$HOME/.local/state/orchestrate}"
 START_TIMEOUT="${OPENCODE_SERVE_START_TIMEOUT:-30}"
 POLL_INTERVAL="${OPENCODE_SERVE_POLL_INTERVAL:-1}"
@@ -31,32 +32,54 @@ WAIT_INCREMENT="$POLL_INTERVAL"
 [ "$WAIT_INCREMENT" -gt 0 ] || WAIT_INCREMENT=1
 LOCK_WAIT_MAX=$((START_TIMEOUT + 10))
 
+# 권한 검사는 두 파일에 같은 규칙으로 적용한다. bash 3.2 호환을 위해 함수로만 묶는다.
+check_env_perm() {
+  CHECK_FILE="$1"
+  CHECK_MODE=$(ls -ld "$CHECK_FILE") || { echo "serve 환경 파일 검사 실패: $CHECK_FILE" >&2; exit 64; }
+  # 공백 분할(set --) 대신 첫 공백 뒤를 제거해 ls의 첫 토큰만 안전하게 취한다.
+  CHECK_MODE=${CHECK_MODE%% *}
+  case "$CHECK_MODE" in
+    [-dlbcps][r-][w-][xsS-][r-][w-][xsS-][r-][w-][xsStT-]|[-dlbcps][r-][w-][xsS-][r-][w-][xsS-][r-][w-][xsStT-][@+.])
+      ;;
+    *)
+      echo "serve 환경 파일 권한 형식 인식 실패: $CHECK_FILE" >&2
+      exit 64
+      ;;
+  esac
+  case "$CHECK_MODE" in
+    ????[rw]*|?????[rw]*|???????[rw]*|????????[rw]*)
+      echo "serve 환경 파일 권한이 너무 열려 있습니다(그룹/기타 읽기·쓰기 금지): $CHECK_FILE" >&2
+      exit 64
+      ;;
+  esac
+}
+
 [ -f "$ENV_FILE" ] || {
   echo "serve 환경 파일 없음: $ENV_FILE" >&2
   exit 64
 }
-ENV_MODE=$(ls -ld "$ENV_FILE") || { echo "serve 환경 파일 검사 실패: $ENV_FILE" >&2; exit 64; }
-# 공백 분할(set --) 대신 첫 공백 뒤를 제거해 ls의 첫 토큰만 안전하게 취한다.
-ENV_MODE=${ENV_MODE%% *}
-case "$ENV_MODE" in
-  [-dlbcps][r-][w-][xsS-][r-][w-][xsS-][r-][w-][xsStT-]|[-dlbcps][r-][w-][xsS-][r-][w-][xsS-][r-][w-][xsStT-][@+.])
-    ;;
-  *)
-    echo "serve 환경 파일 권한 형식 인식 실패: $ENV_FILE" >&2
-    exit 64
-    ;;
-esac
-case "$ENV_MODE" in
-  ????[rw]*|?????[rw]*|???????[rw]*|????????[rw]*)
-    echo "serve 환경 파일 권한이 너무 열려 있습니다(그룹/기타 읽기·쓰기 금지): $ENV_FILE" >&2
-    exit 64
-    ;;
-esac
+check_env_perm "$ENV_FILE"
+# 프로바이더 키는 serve 프로세스가 직접 읽는다. v3 serve+attach 부터 모델 호출이
+# run-delegation.sh 의 자식이 아니라 상주 데몬 안에서 일어나므로, 위임 직전 주입만으로는
+# opencode.json 의 {env:...} 참조가 데몬에서 빈 값이 된다 (2026-09-03·09-04 실측:
+# antigravity `Unauthorized` · qwencloud `No API-key provided.` — 후자는 KF-18).
+# 권한 검사는 `set -a` 밖에서 끝낸다 — 함수 지역변수까지 export 되면 안 된다.
+LOAD_SECRETS=0
+if [ -f "$SECRETS_FILE" ]; then
+  check_env_perm "$SECRETS_FILE"
+  LOAD_SECRETS=1
+fi
+unset CHECK_FILE CHECK_MODE
 
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+if [ "$LOAD_SECRETS" -eq 1 ]; then
+  # shellcheck disable=SC1090
+  . "$SECRETS_FILE"
+fi
 set +a
+unset LOAD_SECRETS
 
 PORT="${OPENCODE_SERVE_PORT:-}"
 PW="${OPENCODE_SERVER_PASSWORD:-}"

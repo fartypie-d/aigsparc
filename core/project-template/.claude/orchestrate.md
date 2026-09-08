@@ -8,8 +8,12 @@
 
 ## 에이전트 로스터 (구현 = opencode)
 
-> **모델은 중앙 정책 파일 `~/.config/opencode/model-policy.json`의 tier 체인으로 배정한다.**
-> `scripts/run-delegation.sh`(v2)가 체인 순서대로 `-m`을 주입하고 한도·무응답 시 자동 폴백한다.
+> **모델은 프로젝트 정책을 우선하고 host 정책으로 폴백하는 tier 체인으로 배정한다.**
+> `scripts/run-delegation.sh`는 먼저 `<git 최상위>/.claude/model-policy.json`을 찾고, Git 저장소가
+> 아니면 `<호출 cwd>/.claude/model-policy.json`을 찾은 뒤 `~/.config/opencode/model-policy.json`으로
+> 폴백한다. 체인 순서대로 `-m`을 주입하고 한도·무응답과 크레딧 오류 시 자동 폴백하며,
+> 실제 정책은 `POLICY_USED=<경로> (project|host)`로 stdout과 `.wrapper` 로그에 기록한다.
+> 두 정책 파일이 모두 없으면 exit 64로 종료하며 두 후보 경로를 오류에 표시한다.
 > `default` = 일반 task / `heavy` = **large 등급·🔴/⚠️ 위험 도메인 task는 처음부터 heavy** + 🔴 반려 재위임 자동 승격.
 > `.opencode/agent/*.md`의 `model:`은 수동 실행용 안전 기본값일 뿐이다.
 > 실사용 모델은 스크립트 출력 `MODEL_USED=` 로 확인한다. 특정 task에 특정 모델을 강제하려면

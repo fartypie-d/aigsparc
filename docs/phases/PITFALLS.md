@@ -328,3 +328,339 @@ phase8 이전 내용(DOCs/ 경로)으로 돌아가 있었다. task 2개를 커�
 **대응**: ① 페이즈 시작 전 `git log --oneline origin/main..main` 으로 미푸시 커밋을 확인하고
 푸시(또는 인지) 후 claim 한다. ② claim 직후 `git merge-base HEAD main` 이 main 팁과 같은지
 확인한다. 다르면 작업 시작 전에 `git rebase main`.
+
+
+## 26. 리뷰어 서브에이전트에게 워크트리를 주면 `git stash` 로 미커밋 작업을 흔든다 (2026-08-17, Phase 10 Task 2 실측)
+
+**무엇을 하면**: 오케스트레이터가 같은 워크트리에서 지시서·테스트를 편집하는 동안
+도메인 리뷰어(Agent)에게 그 워크트리 경로를 주고 "커밋 diff 를 보라"고 지시하면.
+
+**무엇이 죽는지**: 리뷰어가 "리뷰 대상 커밋 상태를 재현하려고" `git stash` 를 실행했다.
+오케스트레이터가 그 순간 편집 중이던 동결 테스트·지시서가 stash 로 빠졌고,
+`git stash pop` 이 충돌로 실패해 stash 가 남았다. 이번엔 내용이 이어지는 커밋에 포함돼
+유실은 없었지만, 타이밍이 조금 달랐으면 동결 테스트가 사라진 채 위임이 그린을 받았다.
+
+**대응**: ① 리뷰어 프롬프트에 **읽기 전용 git 명령만 허용**을 명시한다
+(`git show`·`git diff`·`git log` 만. `stash`·`checkout`·`restore`·`clean` 금지).
+② 리뷰어를 부르기 전에 오케스트레이터의 작업을 **커밋해서 작업트리를 비운다**.
+③ 리뷰 후 `git stash list` 로 잔재를 확인한다.
+
+## 27. 위임 산출물과 오케스트레이터의 테스트 수정을 한 커밋에 묶으면 리뷰어가 "동결 위반"으로 오진한다 (2026-08-17, Phase 10 Task 2 실측)
+
+**무엇을 하면**: 위임이 만든 파일과, 오케스트레이터가 같은 시점에 고친 `tests/` 를
+한 커밋에 함께 담으면.
+
+**무엇이 죽는지**: bash-reviewer 가 그 커밋의 `tests/` 변경을 보고
+"위임 구현자가 동결 테스트를 무단 수정했다"는 🔴 Critical 을 냈다 (PITFALLS 14 재발로 판정).
+실제로는 오케스트레이터의 수정이었고 위임 로그에는 `tests/` 수정 기록이 없었다.
+반박·근거 제시에 라운드가 소모됐다.
+
+**대응**: 오케스트레이터의 `tests/` 수정은 **항상 별도 커밋**으로 남긴다
+(커밋 메시지에 `test(...)` + "오케스트레이터 동결"). 위임 산출물 커밋에는 위임이 만진 파일만 넣는다.
+
+## 28. `unittest -k` 에 불리언 식을 쓰면 0건 매칭으로 조용히 통과한다 (2026-08-17, Phase 10)
+
+**무엇을 하면**: 위임 프롬프트나 검증 명령에 `python3 -m unittest discover -s tests -k "A or B"` 를 쓰면.
+
+**무엇이 죽는지**: `-k` 는 불리언 식을 지원하지 않는다. 패턴 `"A or B"` 는 어떤 테스트 이름과도
+매칭되지 않아 `NO TESTS RAN` 으로 끝나고, 종료 코드는 0 이다 — **"검증했고 통과했다"로 보인다.**
+Phase 10 Task 2 위임 프롬프트에 이 형태를 써서 RED 확인 단계가 실제로는 아무것도 실행하지 않았다.
+
+**대응**: 패턴은 하나씩 준다 (`-k A` 를 두 번 실행). 또는 클래스명을 직접 지정한다.
+필터를 쓴 검증은 `Ran N tests` 의 N 이 0 이 아닌지 확인할 것.
+
+## 29. 출력 전체를 정확일치로 단정한 테스트가 있으면 필드 추가가 순수 회귀를 만든다 (2026-08-17, Phase 10)
+
+**무엇을 하면**: 어떤 출력 블록에 필드를 하나 추가하면서 기존 테스트의 정확일치 단정을 grep 하지 않으면.
+
+**무엇이 죽는지**: `test_install_menu.py:15` 가 `INSTALL_PARSE_ONLY` 의 stdout **전체**를
+문자열 정확일치로 단정하고 있었다. `DOCTOR=0` 한 줄을 추가하자 순수 회귀 1건이 났다.
+PITFALLS 23(메뉴 번호 하드코딩)과 같은 뿌리이며, 이번엔 **출력 문자열** 버전이다.
+
+**대응**: 출력 블록에 필드를 추가하기 전에
+`grep -rn 'assertEqual(\s*result.stdout' tests/` 로 정확일치 단정을 먼저 찾는다.
+발견하면 같은 커밋(오케스트레이터 몫)에서 함께 갱신한다.
+
+## 30. GNU `cp` 는 끊어진 심링크로의 쓰기를 자체 거부한다 — 그 경로로는 가드를 증명할 수 없다 (2026-08-17, Phase 10)
+
+**무엇을 하면**: "끊어진 심링크를 타고 홈 밖에 쓰지 않는다"는 가드를
+"밖에 파일이 생겼는가"만으로 단정하면.
+
+**무엇이 죽는지**: GNU coreutils 의 `cp` 가 `not writing through dangling symlink` 로 자체 거부하므로,
+스크립트의 `[ -L ]` 가드를 **전부 지워도** Linux 에서는 유출이 발생하지 않는다 —
+변이 검증에서 테스트가 죽지 않아 공허한 단정임이 드러났다. macOS `cp` 는 링크를 따라가 쓴다.
+
+**대응**: 이런 가드는 **부수 효과가 아니라 보고 형태**를 단정한다
+(예: "심링크 dst 는 WARN 으로 보고된다" — 가드를 지우면 `FAIL ... 복사할 수 없다` 가 되어 죽는다).
+그리고 심링크 관련 가드는 **부모 디렉터리가 심링크인 경우**로 변이 검증하라 — 그 경로는
+`mkdir -p` 가 실제로 링크를 타므로 Linux 에서도 유출이 재현된다.
+
+## 31. 워크트리에서 만든 프로젝트 에이전트는 그 세션에서 호출되지 않는다 (2026-08-19, Phase 13)
+
+**무엇을 하면**: 워크트리 안에서 `.claude/agents/<이름>.md` 를 만들고, 같은 세션에서 Agent 툴로
+그 이름을 호출한다.
+
+**무엇이 죽는지**: `Agent type '<이름>' not found` 로 즉시 실패한다. 세션 시작 전부터 있던
+프로젝트 에이전트(`bash-reviewer`·`task-orchestrator`)는 정상 호출되므로 "프로젝트 에이전트는
+안 되나 보다"로 오진하기 쉽다.
+
+**원인 (정정된 진단)**: 처음에는 "레지스트리가 세션 시작 시 스냅샷된다"고 판단했으나 **틀렸다.**
+같은 세션에서 페이즈를 main 에 병합해 정의 파일이 **메인 체크아웃**에 들어온 직후 그 에이전트가
+목록에 나타났다. 즉 레지스트리는 갱신되며, 참조하는 위치가 **세션의 프로젝트 루트(메인 체크아웃)**
+이지 현재 cwd(워크트리)가 아니다. 워크트리에만 있는 정의는 보이지 않는다.
+
+**대응**:
+- 페이즈 중 신설한 에이전트의 첫 가동은 **병합 후** 또는 **새 세션**에서 한다.
+  페이즈 경계 = 세션 경계 규약과 자연히 맞는다.
+- 그 전에 꼭 써야 하면 `general-purpose` 에 그 에이전트 정의(행동 제약·출력 형식 포함)를
+  **인라인해 대행**한다. 대행했음을 완료 보고에 명시할 것 — 도구 제약(읽기 전용 등)이
+  프롬프트로만 걸리므로 강제력이 약하다.
+- 지시서에서 "신설 + 그 페이즈에서 첫 사용"을 한 파트로 묶지 말 것.
+
+## 32. 동결 사본(함정 13)은 serve attach 를 잃는다 (2026-08-19, Phase 13)
+
+**무엇을 하면**: 위임 스크립트를 고치는 페이즈에서 PITFALLS 13 대로
+`cp core/scripts/run-delegation.sh .orchestrate/run-delegation-v3.sh` 만 해서 동결 사본을 만든다.
+
+**무엇이 죽는지**: 사본의 `SCRIPT_DIR` 이 `.orchestrate/` 가 되어 형제 스크립트
+`opencode-serve-ctl.sh` 를 찾지 못한다 → `SERVE_FALLBACK` → **standalone + 전역 락**으로 떨어진다.
+프로젝트 간 병렬이 사라지고, 살아 있는 serve 옆에서 도는 동안
+`SERVE_ALIVE_FALLBACK`(세션 DB 경합 위험) 경고까지 뜬다.
+
+**대응**: 동결할 때 `opencode-serve-ctl.sh` 도 **같은 디렉터리에 함께 복사**한다.
+
+```bash
+cp core/scripts/run-delegation.sh .orchestrate/run-delegation-v3.sh
+cp core/scripts/opencode-serve-ctl.sh .orchestrate/opencode-serve-ctl.sh
+```
+
+Phase 13 에서 함께 복사한 뒤 attach 가 복구됐고, 실제로 `LOCK_WAIT(project)` 로 직렬 대기하는
+정상 동작을 실측했다 (Task 5 위임).
+
+**부수 효과 인지**: 동결 사본으로 위임하면 그 페이즈가 만드는 개선이 **그 페이즈 자신의 위임에는
+적용되지 않는다.** Phase 13 은 `.wrapper` 로그를 만들었지만 자기 위임에는 `.wrapper` 가 남지 않았다.
+
+## 33. `phase-tools.py tasks` 는 진행 중 페이즈에 쓸 수 없다 (2026-08-19, Phase 13)
+
+**무엇을 하면**: 워크트리에서 진행 중인 페이즈에 대해
+`python3 scripts/phase-tools.py tasks <N> --set <task>=<status>` 를 실행한다.
+
+**무엇이 죽는지**: `find_root()` 가 `--git-common-dir` 로 **메인 체크아웃**을 가리키므로
+(`core/scripts/phase-tools.py:54`), 지시서가 아직 피처 브랜치에만 있는 동안에는 조회도 `--set` 도
+`PHASE<N>_*.tasks 디렉터리 없음` 으로 실패한다. 이미 병합된 과거 페이즈(`tasks 10`)는 정상 조회된다.
+
+**실측**: Phase 11 이 만든 기계판독 메커니즘이 **정작 그것을 쓰려는 시점에 동작하지 않는다**
+(2026-08-19).
+
+**대응**: 진행 중 페이즈의 상태 전이는 task 파일 frontmatter 와 인덱스 표를 직접 고친다.
+수정(`--worktree` 플래그 또는 cwd 우선 탐색)은 후속 페이즈로.
+
+## 34. 변이 검증 사본이 `.orchestrate/` 를 포함하면 재귀 폭발한다 (2026-08-19, Phase 13)
+
+**무엇을 하면**: PITFALLS 15 대로 "저장소 전체를 `.orchestrate/mut<task>/` 에 복사"하되
+**제외 경로를 지정하지 않는다** — `rsync -a ./ .orchestrate/mut13-3/` · `cp -r . ...` 등.
+
+**무엇이 죽는지**: 사본 안에 `.orchestrate/` 가 통째로 들어가고, 그 안에는 이전 변이 사본이
+또 들어 있다. task 와 리뷰 라운드가 쌓일수록 중첩이 곱해진다.
+**Phase 13 실측: 워크트리 `.orchestrate/` 가 61GB · 파일 372만 개.**
+그 결과 `phase-close.sh` 의 `git worktree remove` 가 60초 타임아웃으로 죽는다
+(함정 4 의 서브모듈 크래시와 증상이 비슷하나 원인이 다르다).
+
+**더 나쁜 것은 타임아웃이 깨끗한 실패가 아니라는 점이다.** `git worktree remove` 는 파일을
+지워 나가다가 중간에 잘리므로, **반쯤 삭제된 워크트리**가 남는다 — 추적 파일 대부분과 `.git`
+파일이 사라져 `git worktree list` 가 `prunable: gitdir file points to non-existent location` 로
+표시하고, phase-close 는 그 상태를 "미병합"으로 오판해 워크트리를 "보존"한다고 보고한다.
+Phase 13 에서는 모든 산출물이 삭제 전에 커밋·병합돼 손실이 없었으나, **미커밋 작업이 있었다면
+그대로 유실됐을 것이다.**
+
+**타임아웃 후 복구**: `find <워크트리> -delete` 로 잔재를 지우고 `git worktree prune` →
+`git branch -d <브랜치>` (병합 확인 후). 함정 4 의 `--force --force` 수동 제거와 같은 계열이다.
+
+**대응**:
+- 변이·재현 사본을 만들 때 **`.orchestrate` 를 반드시 제외**한다:
+  `rsync -a --exclude .orchestrate --exclude .git ./ .orchestrate/mut<task>/`
+  (`.git` 제외도 함께 — 테스트는 git 을 쓰지 않는다.)
+- 지시서의 변이 검증 완료 조건에 이 제외 지시를 **명시**한다. 위임과 리뷰어 양쪽 모두
+  "저장소 전체 복사"만 읽으면 제외를 넣지 않는다 (Phase 13 에서 위임 3회·리뷰어 5회 전부 미제외).
+- 페이즈 마감 전에 `du -sh .orchestrate` 로 확인한다. 수 GB 를 넘으면 사본부터 정리한다.
+- 정리 시 재귀 강제 삭제 명령(`rm -rf`)은 bash-guard 가 차단한다 — **문자열 매칭이라 문서를 쓰는
+  heredoc 이나 grep 인자에 들어가도 걸린다**(이 문서를 쓰다가 실제로 두 번 차단됐다).
+  `find <경로> -delete` 를 쓰거나 사용자에게 직접 실행을 요청한다.
+
+## 35. `unittest.main()` 가드 뒤에 정의한 테스트 클래스는 파일 직접 실행 시 누락된다 (2026-09-01, Phase 12)
+
+**증상**: `python3 -m unittest discover -s tests` 로는 전부 돌지만, `python3 tests/test_x.py` 로
+직접 실행하면 뒤쪽 클래스가 **조용히 빠진다**. 실패가 아니라 "Ran N tests OK" 로 통과하므로
+건수를 세지 않으면 알아챌 수 없다.
+
+**원인**: `if __name__ == "__main__": unittest.main()` 는 실행되는 시점의 모듈 네임스페이스만
+스캔한다. 그 아래에 클래스를 append 하면 아직 정의되지 않은 상태에서 스캔이 끝난다.
+
+**언제 생기는가**: 오케스트레이터가 **동결 테스트를 기존 파일 끝에 append** 할 때. 파일 끝은
+가드 뒤다 — Phase 12 에서 두 파일(`test_kit_doctor.py`·`test_hook_selfcheck.py`)에 동시에 발생했고,
+`structure-reviewer` 가 마감 리뷰에서 잡아냈다. 위임의 실수가 아니라 오케스트레이터의 실수다.
+
+**대응**: 동결 테스트를 append 한 뒤 **가드가 파일 끝인지 확인**한다
+(`grep -n '__main__' tests/*.py` 로 줄 번호 vs `wc -l` 비교). append 했으면 가드를 파일 끝으로
+옮기고, 직접 실행으로 **건수를 확인**한다 (discover 건수와 같아야 한다).
+
+## 36. 동결 테스트 픽스처가 실제 마커를 빠뜨리면 구현이 약한 추론으로 통과한다 (2026-09-01, Phase 12)
+
+**증상**: 위임 구현이 `scripts/` 디렉터리 존재만으로 "킷 루트"를 판정했고, 리뷰어가 🔴
+(비킷 프로젝트 오승격)로 반려했다. 그런데 **원인은 위임이 아니었다** — 오케스트레이터가 동결한
+픽스처가 진짜 마커인 `core/install-manifest.tsv` 를 만들지 않아서, 그 파일을 검사하는 올바른
+구현은 픽스처에서 실패하고 **약한 추론만 통과**하는 구조였다.
+
+**일반형**: 동결 테스트는 계약이지만, 픽스처가 실물의 부분집합이면 **계약이 실물보다 약해진다.**
+위임은 통과하는 최소 구현을 찾으므로 그 약한 쪽으로 수렴한다. 리뷰어는 결과만 보고 위임을
+탓하고, 오케스트레이터는 반려를 위임에 되돌려 보내 같은 픽스처로 다시 시도하게 만든다.
+
+**대응**: 동결 픽스처를 만들 때 **판정에 쓰이길 원하는 마커를 전부 넣는다.** 특히 "이 조건으로
+판정하라"를 지시서 규약에 적었다면, 픽스처에 그 조건의 **양성 사례와 음성 사례를 둘 다** 만든다.
+리뷰가 🔴 를 냈을 때 반려 전에 **픽스처부터 확인**한다 — 구현이 아니라 계약이 틀린 경우가 있다.
+
+## 37. 서브에이전트 결과를 sleep 폴링으로 기다리면 세션 종료 시 고아가 된다 (2026-09-01, Phase 15)
+
+**증상**: 페이즈 말 리뷰어 2개(`code-reviewer`·`structure-reviewer`)를 Agent 툴로 띄운 뒤
+`sleep 290` 을 `run_in_background` 로 걸어 결과를 기다렸다. 리뷰어 둘 다 **정상 완료**해
+완료 알림이 큐에 들어갔지만, 세션은 sleep 이 끝날 때까지 대기 상태에 묶여 알림을 소비하지
+못했다. sleep 종료 직후 사용자가 응답 없는 세션을 강제 종료 — 리뷰 결과 2건이 통째로 고아가 됐다.
+(같은 세션이 앞선 6개 리뷰어 호출에서는 폴링 없이 정상 수신했다. 폴링이 원인이다.)
+
+**왜 그런가**: 하네스는 백그라운드 task 가 끝나면 **자동으로 세션을 재개**해 알림을 준다.
+sleep 폴링은 그 재개 경로에 아무 도움이 안 되면서, 세션을 "무언가를 기다리는 중" 상태로만
+붙잡아 둔다. 실제로는 감시 루프가 자기 자신을 기다리는 꼴이다 (함정 1 의 `pgrep -f` 와 같은 계열).
+
+**대응**:
+- **서브에이전트·백그라운드 명령을 sleep 으로 폴링하지 말 것.** 띄운 뒤 그 턴을 끝내면
+  완료 시 하네스가 알려준다. 외부 상태(CI·원격 큐)처럼 하네스가 추적 못 하는 것만 폴링 대상이다.
+- **이미 고아가 됐다면 결과는 유실되지 않았다.** 세션 트랜스크립트
+  `~/.claude/projects/<cwd 슬러그>/<세션 UUID>.jsonl` 에서 `type: queue-operation` 항목을
+  파싱하면 `<result>` 전문이 그대로 남아 있다. `content` 필드의 `<summary>` 로 어떤 에이전트인지
+  구분할 수 있다. Phase 15 는 이 경로로 리뷰 2건을 전량 회수해 재실행 비용 0 으로 마감했다
+  (`/tmp/claude-*/…/tasks/<id>.output` 심링크가 가리키는 `subagents/agent-<id>.jsonl` 도 같은 내용).
+- 세션이 어느 파일인지는 `ls -lt ~/.claude/projects/<슬러그>/*.jsonl` 의 최신 항목으로 찾는다.
+
+## 38. `session-cost.py` 는 경로에 점이 있으면 세션 디렉터리를 못 찾는다 (2026-09-01, Phase 15)
+
+**증상**: 워크트리에서 시작한 세션의 비용을 재려다 `세션 디렉터리 없음:
+/home/jh/.claude/projects/-home-jh-aigsprac-.claude-worktrees-phase15-model-policy-scope`
+로 실패했다. 실제 디렉터리는 `...-aigsprac--claude-worktrees-...` (점이 대시로 바뀌어 `--`)다.
+
+**원인**: `core/scripts/session-cost.py:project_dir()` 는 슬러그를
+`str(Path.cwd()).replace("/", "-")` 로만 만든다. 하네스는 `/` 뿐 아니라 **`.` 도 `-` 로**
+바꾸므로, 경로에 점이 하나라도 있으면(워크트리는 항상 `.claude/worktrees/` 아래다) 어긋난다.
+
+**왜 지금까지 안 걸렸나**: 기존 함정("세션이 시작된 체크아웃에서 실행할 것")은 세션이 메인
+체크아웃에서 시작한 경우만 다뤘다. **세션 자체가 워크트리에서 시작하면 도망갈 체크아웃이 없다** —
+`cd` 로는 절대 맞출 수 없고(그 슬러그를 만드는 실제 경로가 존재하지 않는다) 정량 3필드의
+비용이 `미측정` 으로 남는다. 세션 도중 `EnterWorktree` 를 하면 트랜스크립트 파일 자체가
+워크트리 슬러그 디렉터리로 **이동**하므로 메인 체크아웃에서 세션 ID 로 찾아도 없다.
+
+**대응 (스크립트를 고치기 전까지)**: 스크립트 자신의 집계 코드를 파일에 직접 물린다 —
+`importlib` 로 `core/scripts/session-cost.py` 를 로드하고 `sc.collect([Path(<jsonl 절대경로>)])`
++ `sc.PRICES` 로 계산한다(추정이 아니라 같은 실측 경로다). 세션 파일 위치는
+`find ~/.claude/projects -maxdepth 2 -name '<세션ID>*'` 로 찾는다.
+
+**근본 수정 후보**: `project_dir()` 의 슬러그를 `.replace("/", "-").replace(".", "-")` 로.
+소스이므로 위임이 필요하다 — 다음 페이즈 권고에 있다.
+
+### 갱신 (2026-09-02, Phase 16 task 2b 이후)
+
+- **절반은 해소됐다.** `--project` 미지정 시 기준이 cwd 가 아니라 **메인 체크아웃**
+  (`git rev-parse --git-common-dir` 의 부모, `main_checkout()`)이 됐다. 워크트리 cwd 에서
+  `python3 scripts/session-cost.py --json` 을 돌려도 메인 체크아웃 슬러그 세션이 정상 집계된다
+  (Phase 16 실측: `{"files": 3, "project_dir": ".../-home-jh-aigsprac", "usd": 62.48}`).
+- **절반은 그대로다.** 슬러그의 `.` → `-` 치환은 여전히 없다(`session-cost.py:48`
+  `str(base.resolve()).replace("/", "-")`). 그래서 **파트 세션처럼 세션 자체가 워크트리에서
+  시작한 경우**는 `--project .` 으로도 못 찾는다:
+  `세션 디렉터리 없음: …/-home-jh-aigsprac-.claude-worktrees-phase16-…`
+  (실제 디렉터리는 `-home-jh-aigsprac--claude-worktrees-phase16-…`).
+- **더 싼 우회 (importlib 불필요, 2026-09-02 실측)**: 점 자리에 `-` 를 넣은 **유사 경로**를
+  `--project` 로 주면 슬러그가 정확히 맞는다 — 존재하지 않는 경로여도 `resolve()` 는
+  정규화만 하므로 동작한다.
+  `python3 scripts/session-cost.py --project /home/jh/aigsprac/-claude/worktrees/phase16-supervisor-bootstrap --session <id> --json`
+  → `{"files": 1, "usd": 3.20…}`. 허용 도구가 `python3 scripts/*.py` 만 열려 있는 헤드리스
+  파트 세션에서도 쓸 수 있다(`python3 -c` 는 막힌다).
+
+## 39. `phase-tools.py tasks` 는 접미사 task(`task1a.md`)를 아예 못 본다 (2026-09-02, Phase 16)
+
+**증상**: 파일이 6개(`task1a`·`task1b`·`task2a`·`task2b`·`task3`·`task4`)인 페이즈에서
+`python3 scripts/phase-tools.py tasks 16` 이 **task 3·4 두 건만** 돌려준다. 상태 전이도
+`--set 1a=done` → `--set 형식은 <task번호>=<status>: '1a=done'` (rc=2) 로 거부된다.
+
+**원인**: 두 곳 모두 정수만 받는다 —
+`core/scripts/phase-tools.py:498` `TASK_FILE_RE = re.compile(r"^task(\d+)\.md$")` (목록 스캔),
+`:551` `n = int(n_str)` (`--set` 파싱, 실패 시 rc=2).
+
+**왜 위험한가**: 이 JSON 은 "기계 판독 단일 소스"로 선언돼 있고 무인 드라이버·대시보드가
+읽는다. 접미사 task 를 쓰면 조회에서 **조용히 빠지고**, `complete` 필드는 보이는 task 만으로
+계산되므로 **미완료 페이즈를 완료로 보고**할 수 있다(Phase 16 에서 1a~2b 4건이 통째로 비침).
+`--next` 도 마찬가지로 접미사 task 를 건너뛴다.
+
+**대응**: (a) RED/GREEN 을 접미사로 쪼개는 관례를 쓸 거면 상태 전이는 frontmatter 직접 편집으로
+하고 `tasks` JSON 의 `complete` 를 신뢰하지 말 것. (b) 또는 접미사를 쓰지 말고 정수 번호를
+늘릴 것(`task1`=RED, `task2`=GREEN). **근본 수정 후보**: 정규식을 `^task(\d+[a-z]?)\.md$` 로,
+`--set` 파싱을 같은 패턴 검증으로 바꾸고 정렬 키를 `(int, suffix)` 로 — 소스이므로 위임 필요.
+
+## 40. 동결 테스트가 "문서화된 진입점"으로 돌지 않으면 fail-open 을 통째로 놓친다 (2026-09-02, Phase 17 파트 17-3)
+
+**trigger**: 테스트가 문서화된 심링크 진입점 `scripts/phase-tools.py` 대신
+`core/scripts/phase-tools.py`를 직접 실행하면.
+
+**changes**: 심링크로 부를 때의 `retry-guard --record` 크래시를 놓쳐 fail-open이 된다. 심링크 진입점을
+쓰는 스크립트에는 그 경로로 도는 테스트를 최소 1건 동결해야 한다(함정 32의 동결 사본이 `SCRIPT_DIR`을
+잃는 Python 판).
+
+**evidence**: 동결 테스트 12건은 전부 GREEN이었지만 심링크 호출에서 매번 크래시했다 — 동반 스크립트를
+`__file__` 의 형제로 찾아 없는 경로 `scripts/supervisor-state.sh` 를 가리켰다. security-reviewer가
+지적했고 오케스트레이터가 심링크 경로로 재현했으며, task 3b 재위임 1회차 `d15a8ed`(`__file__` 정규화)로
+수정됐다.
+
+**outcome**: 수정 확인. 회귀는 `tests/test_phase_tools.py::RetryGuardHardeningTest::test_record_works_through_symlinked_entrypoint`
+로 동결했다 — 심링크 진입점으로 `--record` 를 돌려 exit 0 과 `--check` 의 exit 3 을 함께 단정한다.
+
+**scope**: kit
+
+## 41. 위임이 도는 중에 전체 스위트를 돌리면 없는 실패가 보인다 (2026-09-02, Phase 17 파트 17-2)
+
+**trigger**: `opencode serve`가 떠 있는 위임 실행 중에 전체 스위트를 돌리면.
+
+**changes**: `test_serve_ctl`이 1건 더 실패해 위임의 "선재 실패 11건" 보고가 생긴다. 회귀 판정은
+위임이 아니라 오케스트레이터가 위임 종료 후 해야 하며, 위임의 선재 실패 보고를 회귀 기준선으로 삼지
+않는다.
+
+**evidence**: 위임 중 `opencode serve`가 떠 있을 때 `test_serve_ctl` 1건이 추가 실패했다. 위임 종료 후
+오케스트레이터가 `test_serve_ctl`을 다시 실행해 16건 전부 OK를 확인했다.
+
+**outcome**: 위임 종료 후 재실행에서 `test_serve_ctl` 16건 전부 OK 확인.
+
+**scope**: kit
+
+## 42. RED 를 쓰고 나면 "지금 통과하는지" 를 반드시 확인해라 (2026-09-02, Phase 17 파트 17-3)
+
+**trigger**: RED 테스트를 작성한 직후 실제로 FAIL하는지 실행해 확인하지 않으면.
+
+**changes**: 이미 통과하는 테스트를 RED로 오인해 항상 참인 테스트가 남고 함정 1·14가 재발한다. RED 작성
+직후 실행해 FAIL을 눈으로 확인해야 한다.
+
+**evidence**: 처음 작성한 cwd 의존 테스트는 픽스처에 미추적 파일이 없어 이미 통과했고, FIFO 테스트는
+git이 FIFO를 미추적 파일로 나열하지 않아 이미 통과했다. 조건 보강 후 전자는 진짜 RED가 됐고 후자는
+폐기했다.
+
+**outcome**: cwd 의존 테스트는 조건 보강 후 진짜 RED 확인, FIFO 테스트는 폐기.
+
+**scope**: kit
+
+## 43. `retry-guard` 의 `phase`·`part` 는 문자열 그대로 비교된다 — zero-padding 이 가드를 뚫는다 (2026-09-02, Phase 17 파트 17-4 실측)
+
+**trigger**: `retry-guard`에 같은 파트를 zero-padding 유무가 다른 `phase`·`part` 문자열로 기록·검사하면.
+
+**changes**: 같은 파트가 다른 파트로 취급돼 무변경 재시도가 통과하는 fail-open이 된다. 감독 PROCEDURE와
+스크립트 호출부의 표기를 하나로 통일하고 zero-padding을 금지해야 한다. 정규화는 다음 페이즈 후보다.
+
+**evidence**: `--record 17 4` 뒤 `--check 17 04`는 "스코프 불일치로 통과"하며 exit 0이었다.
+
+**outcome**: 미검증 — 정규화 수정은 하지 않았고 호출 규약(zero-padding 금지)으로만 막았다.
+
+**scope**: kit

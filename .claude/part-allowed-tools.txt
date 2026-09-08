@@ -1,0 +1,46 @@
+Read
+Edit
+Write
+Grep
+Glob
+Agent
+TodoWrite
+Bash(git status:*)
+Bash(git diff:*)
+Bash(git log:*)
+Bash(git show:*)
+Bash(git add:*)
+Bash(git commit:*)
+Bash(git branch)
+Bash(git stash list)
+Bash(git worktree list)
+Bash(ls:*)
+Bash(pwd)
+Bash(bash scripts/run-delegation.sh:*)
+Bash(bash scripts/hook-selfcheck.sh)
+Bash(bash scripts/opencode-serve-ctl.sh status)
+Bash(bash scripts/opencode-serve-ctl.sh sessions)
+Bash(python3 scripts/phase-tools.py:*)
+Bash(python3 scripts/session-cost.py:*)
+Bash(python3 scripts/docs-index.py)
+Bash(python3 -m unittest:*)
+Bash(bash -n:*)
+Bash(cp:*)
+Bash(diff:*)
+Bash(tail:*)
+Bash(head:*)
+Bash(wc:*)
+Bash(date:*)
+Bash(ps:*)
+Bash(grep:*)
+Bash(mkdir -p .orchestrate:*)
+Bash(install -m 600 /dev/null .orchestrate/:*)
+Bash(cat > .orchestrate/:*)
+Bash(cat .orchestrate/:*)
+Bash(printf:*)
+Bash(echo:*)
+Skill
+Bash(rsync:*)
+Bash(sleep:*)
+Bash(until:*)
+Bash(tee -a /home/jh/aigsprac/.orchestrate/events.jsonl)

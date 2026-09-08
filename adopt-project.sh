@@ -56,6 +56,11 @@ done
 stamp_copy "$KIT_DIR" "$TARGET" "$HARNESSES"
 stamp_placeholders "$TARGET" "$NAME"
 stamp_finalize "$TARGET"
+for harness in $HARNESSES; do
+  if [ "$harness" = "claude" ]; then
+    stamp_supervisor "$KIT_DIR" "$TARGET" "$NAME" || echo "   ⚠️ 감독 자산은 만들지 못했다 (위 사유). 나머지 설치는 정상 완료했다." >&2
+  fi
+done
 
 echo
 echo "기본 설치 완료."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orchestrate phase 레지스트리 도구 — init / claim / close / janitor / dashboard-mounts.
+"""orchestrate phase 레지스트리 도구 — init / claim / close / janitor / dashboard-mounts / tasks.
 
 phase 번호의 유일한 진실의 원천은 ~/.local/state/orchestrate/registry/<project>.json.
 git 밖·세션 밖 파일이므로 병렬 세션의 브랜치 가시성 한계와 세션 절단에 영향받지 않는다.
@@ -11,14 +11,17 @@ git 밖·세션 밖 파일이므로 병렬 세션의 브랜치 가시성 한계�
   python3 scripts/phase-tools.py close <N> [--keep-worktree] [--force] [--target <ref>]
   python3 scripts/phase-tools.py janitor
   python3 scripts/phase-tools.py dashboard-mounts [--print-path]
+  python3 scripts/phase-tools.py tasks <N> [--set <task>=<status>] [--next]
 """
 from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime
@@ -57,6 +60,22 @@ def find_root() -> Path:
     if not common.is_absolute():
         common = (Path.cwd() / common).resolve()
     return common.parent
+
+
+def find_docs_root(main_root: Path) -> Path:
+    """호출 cwd 체크아웃의 문서 루트를 반환한다.
+
+    레지스트리는 메인, 문서는 cwd 체크아웃 우선(KF-13)으로 접근한다. git 밖이면
+    메인 루트로 폴백하지 않고 명시 오류를 낸다.
+    """
+    r = sh(["git", "rev-parse", "--show-toplevel"], check=False)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise SystemExit(
+            f"git 최상위를 해석할 수 없다 (cwd={Path.cwd()}): {r.stderr.strip()}")
+    top = Path(r.stdout.strip()).resolve()
+    if not (top / ".git").exists():
+        raise SystemExit(f"해석된 최상위에 .git 이 없다: {top}")
+    return top
 
 
 def is_clean(path) -> bool:
@@ -477,6 +496,310 @@ def _janitor_inner():
     return 0
 
 
+TASK_STATUSES = ("pending", "in-progress", "done", "blocked", "superseded")
+TASK_FILE_RE = re.compile(r"^task(\d+)\.md$")
+
+
+def parse_task_frontmatter(text: str) -> dict[str, str]:
+    # docs-index.py parse_frontmatter 최소 사본 — 하이픈 파일명이라 import 불가 (PHASE11 전제 실측)
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    fm: dict[str, str] = {}
+    for line in text[3:end].splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            fm[k.strip()] = v.strip()
+    return fm
+
+
+def find_tasks_dir(root: Path, docs_dir: str, phase: int) -> Path | None:
+    hits = sorted((root / docs_dir).glob(f"PHASE{phase}_*.tasks"))
+    dirs = [h for h in hits if h.is_dir()]
+    return dirs[0] if dirs else None
+
+
+def task_title(text: str) -> str:
+    m = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def cmd_tasks(args: argparse.Namespace) -> int:
+    root = find_root()
+    with Registry(root) as reg:
+        if reg.data is None:
+            print("레지스트리 없음 — 먼저 init", file=sys.stderr)
+            return 2
+        docs_dir = reg.data["docs_dir"]
+    docs_root = find_docs_root(root)
+    searched_docs_root = docs_root
+    tasks_dir = find_tasks_dir(docs_root, docs_dir, args.phase)
+    if tasks_dir is None and docs_root != root:
+        tasks_dir = find_tasks_dir(root, docs_dir, args.phase)
+        docs_root = root
+        if tasks_dir is not None:
+            print("문서를 cwd 체크아웃에서 찾지 못해 메인 체크아웃에서 찾았다: "
+                  f"{root}", file=sys.stderr)
+    if tasks_dir is None:
+        print(f"PHASE{args.phase}_*.tasks 디렉터리 없음 "
+              f"({docs_dir}; 탐색: {searched_docs_root}, {root})", file=sys.stderr)
+        return 2
+
+    if args.set:
+        try:
+            n_str, _, status = args.set.partition("=")
+            n = int(n_str)
+        except ValueError:
+            print(f"--set 형식은 <task번호>=<status>: {args.set!r}", file=sys.stderr)
+            return 2
+        if status not in TASK_STATUSES:
+            print(f"허용 status 아님: {status!r} (허용: {', '.join(TASK_STATUSES)})",
+                  file=sys.stderr)
+            return 2
+        path = tasks_dir / f"task{n}.md"
+        if not path.exists():
+            print(f"task 파일 없음: {path}", file=sys.stderr)
+            return 2
+        text = path.read_text()
+        if text.startswith("---") and text.find("\n---", 3) != -1:
+            end = text.find("\n---", 3)
+            head, body = text[: end + 4], text[end + 4:]
+            if re.search(r"^status:\s*\S+$", head, re.MULTILINE):
+                head = re.sub(r"^status:\s*\S+$", f"status: {status}", head,
+                              count=1, flags=re.MULTILINE)
+            else:
+                head = head[:-4] + f"status: {status}\n---"
+            path.write_text(head + body)
+        else:
+            path.write_text(f"---\ntask: {n}\nstatus: {status}\n---\n\n" + text)
+        print(f"task {n} → {status}: {path.resolve()}")
+        return 0
+
+    entries = []
+    for f in sorted(tasks_dir.iterdir()):
+        m = TASK_FILE_RE.match(f.name)
+        if not m:
+            continue
+        fm = parse_task_frontmatter(f.read_text())
+        entries.append({
+            "task": int(m.group(1)),
+            # frontmatter 부재는 디폴트 대입 없이 unknown으로 그대로 노출 (silent fallback 금지)
+            "status": fm.get("status", "unknown"),
+            "title": task_title(f.read_text()),
+            "path": str(f.relative_to(docs_root)),
+        })
+    entries.sort(key=lambda e: e["task"])
+
+    if args.next:
+        runnable = [e for e in entries if e["status"] == "in-progress"] or \
+                   [e for e in entries if e["status"] == "pending"]
+        if not runnable:
+            return 1
+        print(runnable[0]["task"])
+        return 0
+
+    complete = bool(entries) and all(
+        e["status"] in ("done", "superseded") for e in entries
+    )
+    print(json.dumps(
+        {"phase": args.phase, "docs_root": str(docs_root), "tasks": entries,
+         "complete": complete},
+        ensure_ascii=False, indent=2,
+    ))
+    return 0
+
+
+def retry_guard_snapshot() -> str:
+    """현재 git 워크트리의 내용 기반 스냅샷 해시를 반환한다."""
+    root_result = subprocess.run(
+        ("git", "rev-parse", "--show-toplevel"), cwd=Path.cwd(),
+        capture_output=True, text=False, timeout=60)
+    if root_result.returncode != 0:
+        stderr = root_result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git 최상위 해석 실패: {stderr}")
+    root = Path(os.fsdecode(root_result.stdout).strip()).resolve()
+    commands = (
+        ("git", "status", "-z", "-uall"),
+        ("git", "diff", "--binary", "HEAD"),
+        ("git", "ls-files", "-z", "--full-name", "--others", "--exclude-standard"),
+    )
+    results = []
+    for command in commands:
+        result = subprocess.run(
+            command, cwd=root, capture_output=True, text=False, timeout=60)
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"git 명령 실패 ({' '.join(command)}): {stderr}")
+        results.append(result.stdout)
+
+    digest = hashlib.sha256()
+    digest.update(results[0])
+    digest.update(results[1])
+    for relative_path in sorted(path for path in results[2].split(b"\0") if path):
+        path = root / os.fsdecode(relative_path)
+        try:
+            path_stat = os.lstat(path)
+        except OSError:
+            content_hash = hashlib.sha256(
+                b"retry-guard:unreadable\0" + relative_path
+            ).hexdigest()
+        else:
+            if stat.S_ISLNK(path_stat.st_mode):
+                try:
+                    link_target = os.fsencode(os.readlink(path))
+                    content_hash = hashlib.sha256(
+                        b"retry-guard:symlink\0" + relative_path + b"\0" + link_target
+                    ).hexdigest()
+                except OSError:
+                    content_hash = hashlib.sha256(
+                        b"retry-guard:symlink-unreadable\0" + relative_path
+                    ).hexdigest()
+            else:
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except OSError:
+                    content_hash = hashlib.sha256(
+                        b"retry-guard:unreadable\0" + relative_path + b"\0" +
+                        str(path_stat.st_size).encode("ascii") + b"\0" +
+                        str(path_stat.st_mtime_ns).encode("ascii")
+                    ).hexdigest()
+                else:
+                    try:
+                        opened_stat = os.fstat(fd)
+                        if not stat.S_ISREG(opened_stat.st_mode):
+                            content_hash = hashlib.sha256(
+                                b"retry-guard:special\0" + relative_path + b"\0" +
+                                str(opened_stat.st_mode).encode("ascii")
+                            ).hexdigest()
+                        else:
+                            content_digest = hashlib.sha256()
+                            while True:
+                                chunk = os.read(fd, 65536)
+                                if not chunk:
+                                    break
+                                content_digest.update(chunk)
+                            content_hash = content_digest.hexdigest()
+                    except OSError:
+                        content_hash = hashlib.sha256(
+                            b"retry-guard:unreadable\0" + relative_path + b"\0" +
+                            str(path_stat.st_size).encode("ascii") + b"\0" +
+                            str(path_stat.st_mtime_ns).encode("ascii")
+                        ).hexdigest()
+                    finally:
+                        os.close(fd)
+        digest.update(relative_path)
+        digest.update(b"\0")
+        digest.update(content_hash.encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def retry_guard_state_location(args: argparse.Namespace, root: Path) -> tuple[Path, str, str]:
+    """상태 파일과 supervisor-state.sh에 넘길 project/XDG_STATE_HOME을 해석한다."""
+    if args.state is None:
+        xdg_state = Path(os.environ.get(
+            "XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
+        return (xdg_state / "orchestrate" / "supervisor" / f"{root.name}.json",
+                root.name, str(xdg_state))
+
+    state_path = Path(args.state)
+    if state_path.suffix != ".json" or state_path.parent.name != "supervisor" \
+            or state_path.parent.parent.name != "orchestrate" or not state_path.stem:
+        raise ValueError(
+            "--state는 <XDG_STATE_HOME>/orchestrate/supervisor/<project>.json 레이아웃이어야 한다")
+    project = state_path.stem
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", project):
+        raise ValueError("--state의 프로젝트명은 영문자·숫자·.·_·- 만 사용할 수 있다")
+    return state_path, project, str(state_path.parents[2])
+
+
+def cmd_retry_guard(args: argparse.Namespace) -> int:
+    """직전 실패 뒤 워크트리에 변경이 없으면 같은 파트 재시도를 막는다."""
+    if not re.fullmatch(r"[0-9]+", args.phase):
+        print(f"retry-guard 오류: phase는 십진 정수여야 한다: {args.phase}",
+              file=sys.stderr)
+        return 1
+    try:
+        root = find_root()
+        state_path, project, xdg_state = retry_guard_state_location(args, root)
+        if state_path.is_symlink():
+            raise ValueError(f"상태 파일이 심링크라 거부했다: {state_path}")
+        if not state_path.exists():
+            print(f"retry-guard 상태 파일이 없다: {state_path}", file=sys.stderr)
+            return 2
+        if not stat.S_ISREG(os.lstat(state_path).st_mode):
+            raise ValueError(f"상태 파일이 정규 파일이 아니라 거부했다: {state_path}")
+        raw_state = state_path.read_bytes()
+        state = json.loads(raw_state)
+        if not isinstance(state, dict):
+            raise ValueError("상태 JSON은 객체여야 한다")
+        snapshot = retry_guard_snapshot()
+    except (OSError, ValueError, json.JSONDecodeError, RuntimeError,
+            subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        print(f"retry-guard 오류: {error}", file=sys.stderr)
+        return 1
+
+    if args.check or not args.record:
+        failure = state.get("last_failure")
+        if failure is None:
+            return 0
+        if not isinstance(failure, dict) or not isinstance(
+                failure.get("worktree_hash"), str):
+            print("retry-guard 오류: last_failure.worktree_hash가 없다", file=sys.stderr)
+            return 1
+        if "phase" not in failure or "part" not in failure:
+            print("retry-guard 통지: 스코프 없는 구버전 기록을 그대로 비교했다",
+                  file=sys.stderr)
+        elif str(failure["phase"]) != str(args.phase) or \
+                str(failure["part"]) != str(args.part):
+            print("retry-guard 통지: 스코프 불일치로 통과 "
+                  f"(기록 phase={failure['phase']} part={failure['part']}; "
+                  f"요청 phase={args.phase} part={args.part})", file=sys.stderr)
+            return 0
+        if failure["worktree_hash"] == snapshot:
+            print(f"retry_exhausted: phase={args.phase} part={args.part} 워크트리 변경 없음")
+            return 3
+        return 0
+
+    failure = state.get("last_failure")
+    if failure is None:
+        failure = {}
+        state["last_failure"] = failure
+    if not isinstance(failure, dict):
+        print("retry-guard 오류: last_failure는 객체여야 한다", file=sys.stderr)
+        return 1
+    failure["worktree_hash"] = snapshot
+    failure["phase"] = args.phase
+    failure["part"] = args.part
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = xdg_state
+    command = [str(Path(__file__).resolve().with_name("supervisor-state.sh")), "set", project,
+               "-", "--baseline", hashlib.sha256(raw_state).hexdigest()]
+    try:
+        result = subprocess.run(
+            command, input=json.dumps(state, ensure_ascii=False) + "\n",
+            text=True, capture_output=True, env=env, timeout=60)
+    except (FileNotFoundError, PermissionError, OSError) as error:
+        print(f"retry-guard 상태 기록 스크립트 실행 실패: {error}",
+               file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print("retry-guard 상태 기록 시간이 초과됐다 (60초)", file=sys.stderr)
+        return 1
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        print(f"retry-guard 상태 기록 실패 (exit {result.returncode}): {detail}",
+              file=sys.stderr)
+        if result.returncode == 3:
+            return 4
+        if result.returncode == 2:
+            return 2
+        return 1
+    return 0
+
+
 def cmd_dashboard_mounts(args: argparse.Namespace) -> int:
     """레지스트리의 존재하는 문서 디렉터리로 대시보드 compose override를 만든다."""
     registry_dir = state_dir()
@@ -601,6 +924,25 @@ def main(argv=None):
     p_mounts.add_argument("--print-path", action="store_true",
                           help="생성 없이 override 대상 경로만 출력")
     p_mounts.set_defaults(fn=cmd_dashboard_mounts)
+
+    p_tasks = sub.add_parser("tasks", help="task 상태 조회(JSON)·갱신 — 무인 드라이버·대시보드용")
+    p_tasks.add_argument("phase", type=int)
+    p_tasks.add_argument("--set", metavar="N=STATUS",
+                         help=f"taskN.md frontmatter status 갱신 (허용: {', '.join(TASK_STATUSES)})")
+    p_tasks.add_argument("--next", action="store_true",
+                         help="실행 가능 task 번호만 출력 (in-progress 우선, 없으면 최소 pending; 전무 시 exit 1)")
+    p_tasks.set_defaults(fn=cmd_tasks)
+
+    p_retry = sub.add_parser("retry-guard", help="무변경 실패 재시도를 차단")
+    p_retry.add_argument("phase")
+    p_retry.add_argument("part")
+    retry_mode = p_retry.add_mutually_exclusive_group()
+    retry_mode.add_argument("--record", action="store_true",
+                            help="현재 워크트리 스냅샷을 직전 실패 상태로 기록")
+    retry_mode.add_argument("--check", action="store_true",
+                            help="직전 실패 뒤 워크트리 변경 여부 확인 (기본)")
+    p_retry.add_argument("--state", default=None, help="감독 상태 JSON 경로")
+    p_retry.set_defaults(fn=cmd_retry_guard)
 
     args = p.parse_args(argv)
     return args.fn(args)

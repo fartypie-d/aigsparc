@@ -6,7 +6,9 @@
 
 ## 에이전트 로스터 (구현 = opencode)
 
-> **모델은 중앙 정책 파일 `~/.config/opencode/model-policy.json`의 tier 체인으로 배정한다.**
+> **모델은 정책 파일의 tier 체인으로 배정한다** — 저장소 최상위의 `.claude/model-policy.json`이
+> 있으면 그것이, 없으면 호스트 전역 `~/.config/opencode/model-policy.json`이 원본이다.
+> 실제 쓰인 정책은 스크립트 출력 `POLICY_USED=<경로> (project|host)`로 확인한다.
 > `scripts/run-delegation.sh`(v2)가 체인 순서대로 `-m`을 주입하고 한도·무응답 시 자동 폴백한다.
 > `default` = 일반 task / `heavy` = **large 등급·🔴/⚠️ 위험 도메인 task는 처음부터 heavy** + 🔴 반려 재위임 자동 승격.
 > `.opencode/agent/*.md`의 `model:`은 수동 실행용 안전 기본값일 뿐이다.
@@ -17,7 +19,7 @@
 |---|---|---|
 | `kit-scripts` | `install.sh`, `new-project.sh`, `adopt-project.sh`, `lib/`, `core/opencode/*.sh`, `core/scripts/*` (`*.sh`·`*.py` 모두 — `phase-tools.py`·`docs-index.py` 포함), `adapters/**/*.sh` | ⚠️ — 설치 스크립트가 사용자 홈(`~/.claude`, `~/.config`)을 건드린다 |
 | `kit-tests` | `tests/*.py` | 낮음 |
-| `kit-docs` | `README.md`, `docs/`, `core/project-template/**/*.md`, `containers/**/README.md` | 낮음 |
+| `kit-docs` | `README.md`, `docs/`, `core/project-template/**/*.md`, `containers/**/README.md`, `adapters/**/skills/**/*.md` | 낮음 |
 
 > 모델 ID는 `~/.config/opencode/opencode.json`의 `models{}`에 등록된 것만 유효하다.
 > 등록 확인: `opencode models`. 예외: `xai/*`는 `/connect` OAuth 빌트인이라 등록 없이 유효.
@@ -47,9 +49,22 @@ task 하나가 끝날 때마다 해당 도메인의 리뷰어를 **Agent 툴로 
   도메인에만 만들고, 근거를 여기 한 줄로 남긴다.
 - `bash-reviewer` 신설 근거: ECC 68개 에이전트에 shell 전용 리뷰어가 없음(2026-08-07 실측).
   이 저장소는 코드의 대부분이 bash 다.
+- `structure-reviewer` 신설 근거: ECC 에 **읽기 전용 구조 리뷰어**가 없음(2026-08-19 실측).
+  `architect`·`code-architect` 는 읽기 전용이나 설계 산출물 **생성**용이고,
+  `code-simplifier`·`refactor-cleaner` 는 Write/Edit 를 가져 리뷰어로 쓰면 PITFALLS 26 이 재발한다.
 - 판정에 🔴 Critical이 하나라도 있으면 **반려** — 같은 에이전트에 **heavy tier로**
   재위임(`run-delegation.sh ... heavy`, 최대 2회).
 - 모든 리뷰어 호출에 중복 검사 지시 포함 (`_reuse-rules.md` 참조).
+
+### `structure-reviewer` — 페이즈 마감 시 1회 (task별 호출 아님)
+
+`.claude/agents/structure-reviewer.md`. **task 검수 리뷰어가 아니다.** 페이즈의 모든 task 가
+끝난 뒤 GATE 2 전에 **한 번** 호출하고, 전달물은 **페이즈 누적 diff**
+(`git diff <페이즈 시작 커밋>..HEAD`)와 변경된 파일 목록이다.
+task 단위 diff 로는 구조를 판단할 수 없다 — 한 task 의 +40 줄은 언제나 정당해 보인다.
+
+**게이트가 아니다.** 🔴 로 마감을 막지 않으며, 산출물(구조 부채·분할 후보·다음 페이즈 권고)은
+페이즈 완료 보고의 "후속 제안"과 다음 페이즈 지시서의 입력으로 쓴다.
 
 ## TDD 게이트
 
