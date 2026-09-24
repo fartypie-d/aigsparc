@@ -816,6 +816,11 @@ SUPERVISOR_PROCEDURE_ROW = (
 SUPERVISOR_COMMANDS_ROW = (
     "claude", "tree", "adapters/claude/global/commands", ".claude/commands",
 )
+# Phase 19 — 감독 도구(instruction-check·scaffold-drift)도 매니페스트 트리 행으로 깔린다.
+SUPERVISOR_TOOLS_ROW = (
+    "claude", "tree", "core/supervisor/tools", ".claude/supervisor/tools",
+)
+SUPERVISOR_TOOL_NAMES = ("instruction-check.py", "scaffold-drift.py")
 
 
 def run_doctor_with_state(home, state_home, *args):
@@ -846,6 +851,15 @@ class SupervisorManifestTest(unittest.TestCase):
                         "범용 supervise 커맨드 원본이 없다")
         self.assertTrue((commands / "supervise-PROJECT.md.tpl").exists(),
                         "프로젝트별 supervise 커맨드 템플릿이 없다")
+        # Phase 20: /restart-prep 이 supervise 커맨드 옆에 키트 자산으로 놓인다.
+        restart_prep = commands / "restart-prep.md"
+        self.assertTrue(restart_prep.exists(), "restart-prep 커맨드 원본이 없다")
+        restart_text = restart_prep.read_text(encoding="utf-8")
+        self.assertTrue(restart_text.startswith("---\ndescription:"),
+                        "restart-prep.md 는 description frontmatter 로 시작해야 한다")
+        for host_specific in ("/home/", "-home-"):
+            self.assertNotIn(host_specific, restart_text,
+                             f"restart-prep.md 에 호스트 전용 값이 남아 있다: {host_specific}")
 
         with temporary_directory() as home:
             result = run_doctor(home, "--claude", "--add-missing")
@@ -857,6 +871,61 @@ class SupervisorManifestTest(unittest.TestCase):
                              "설치본이 킷 원본과 다르다")
             self.assertTrue((Path(home) / ".claude/commands/supervise.md").exists(),
                             "--add-missing 이 범용 supervise 커맨드를 깔지 않았다")
+            self.assertTrue((Path(home) / ".claude/commands/restart-prep.md").exists(),
+                            "--add-missing 이 restart-prep 커맨드를 깔지 않았다")
+
+    def test_manifest_installs_supervisor_tools(self):
+        rows = read_manifest()
+        self.assertIn(SUPERVISOR_TOOLS_ROW, rows,
+                      "매니페스트에 core/supervisor/tools 트리 행이 없다")
+        tools = KIT / "core" / "supervisor" / "tools"
+        for name in SUPERVISOR_TOOL_NAMES:
+            self.assertTrue((tools / name).is_file(), f"킷 원본이 없다: {tools / name}")
+        # 테스트 파일은 tests/ 에 산다 — 트리 행이 홈으로 옮기는 것은 도구 둘뿐이어야 한다.
+        self.assertEqual(sorted(p.name for p in tools.iterdir() if p.name != "__pycache__"),
+                         sorted(SUPERVISOR_TOOL_NAMES))
+
+        with temporary_directory() as home:
+            result = run_doctor(home, "--claude", "--add-missing")
+            installed_dir = Path(home) / ".claude/supervisor/tools"
+            for name in SUPERVISOR_TOOL_NAMES:
+                installed = installed_dir / name
+                self.assertTrue(installed.exists(),
+                                f"--add-missing 이 {name} 을 깔지 않았다:\n{result.stdout}{result.stderr}")
+                self.assertEqual(installed.read_bytes(), (tools / name).read_bytes(),
+                                 f"설치본이 킷 원본과 다르다: {name}")
+            again = run_doctor(home, "--claude")
+            self.assertNotIn(f"DRIFT 자산: .claude/supervisor/tools", again.stdout)
+            self.assertNotIn(f"FAIL 자산: .claude/supervisor/tools", again.stdout)
+
+    def test_tree_install_skips_bytecode_caches(self):
+        """PR #21 리뷰 MEDIUM: tree 복사가 __pycache__·*.pyc 를 걸러내지 않아 홈에 깔렸다
+        (실측 `ADDED 자산: .claude/supervisor/tools/__pycache__`). 최상위와 중첩 둘 다 거른다."""
+        source_root = KIT / ".orchestrate" / "testsrc-bytecode"
+        shutil.rmtree(source_root, ignore_errors=True)
+        (source_root / "__pycache__").mkdir(parents=True)
+        (source_root / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\x00")
+        (source_root / "stale.pyc").write_bytes(b"\x00")
+        (source_root / "tool.py").write_text("print('ok')\n")
+        (source_root / "pkg" / "__pycache__").mkdir(parents=True)
+        (source_root / "pkg" / "__pycache__" / "y.pyc").write_bytes(b"\x00")
+        (source_root / "pkg" / "mod.py").write_text("x = 1\n")
+        self.addCleanup(lambda: shutil.rmtree(source_root, True))
+        with temporary_directory() as home:
+            manifest = Path(home) / "manifest.tsv"
+            manifest.write_text("any\ttree\t.orchestrate/testsrc-bytecode\t.claude/supervisor/tools\n")
+            result = run_doctor(home, "--claude", "--manifest", str(manifest), "--add-missing")
+            installed = Path(home) / ".claude/supervisor/tools"
+            self.assertTrue((installed / "tool.py").is_file(), result.stdout + result.stderr)
+            self.assertTrue((installed / "pkg" / "mod.py").is_file(), result.stdout + result.stderr)
+            self.assertFalse((installed / "__pycache__").exists(),
+                             f"__pycache__ 가 홈에 깔렸다:\n{result.stdout}")
+            self.assertFalse((installed / "stale.pyc").exists(), f"*.pyc 가 홈에 깔렸다:\n{result.stdout}")
+            self.assertFalse((installed / "pkg" / "__pycache__").exists(),
+                             f"중첩 __pycache__ 가 홈에 깔렸다:\n{result.stdout}")
+            self.assertNotIn("__pycache__", result.stdout)
+            again = run_doctor(home, "--claude", "--manifest", str(manifest))
+            self.assertEqual(again.returncode, 0, f"재점검이 캐시 부재를 문제로 봤다:\n{again.stdout}{again.stderr}")
 
 
 class SupervisorDriftTest(unittest.TestCase):

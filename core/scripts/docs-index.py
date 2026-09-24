@@ -166,6 +166,28 @@ def extract(path: Path, docs_dir: Path) -> dict[str, str]:
     }
 
 
+# 출처: 프로젝트 저장소 docs-index 수선 판(2026-09-04 「docs-index 정렬을 전순서로」)을 Phase 19 에서 키트 원본으로 들여왔다.
+def sort_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """phase·date 내림차순으로 정렬한다. 동률은 doc 경로 오름차순으로 깬다.
+
+    정렬 키가 (phase, date) 뿐이면 동률 행의 순서가 rglob 이 돌려주는 파일시스템
+    순서에 좌우돼 기계마다 달라진다. 개발 호스트와 CI 러너에서 INDEX.md 가 다르게
+    생성되면 드리프트 게이트가 정당한 이유 없이 빨개진다 (2026-09-04 실측:
+    Phase 0 문서 2개가 phase·date 동률이라 로컬과 CI 러너의 행 순서가 어긋났다).
+    파이썬 sort 는 안정 정렬이므로 doc 으로 먼저 정렬한 뒤 phase·date 로 다시 정렬하면
+    동률 안에서 doc 오름차순이 보존된다. 입력 리스트는 바꾸지 않는다.
+    """
+    def phase_num(r: dict[str, str]) -> int:
+        try:
+            return int(r["phase"])
+        except ValueError:
+            return -1
+
+    rows = sorted(rows, key=lambda r: r["doc"])
+    rows.sort(key=lambda r: (phase_num(r), r["date"]), reverse=True)
+    return rows
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="docs-index")
     parser.add_argument(
@@ -189,14 +211,7 @@ def main(argv=None) -> int:
             continue
         rows.append(extract(p, docs_dir))
 
-    def sort_key(r: dict[str, str]):
-        try:
-            ph = int(r["phase"])
-        except ValueError:
-            ph = -1
-        return (ph, r["date"])
-
-    rows.sort(key=sort_key, reverse=True)
+    rows = sort_rows(rows)
 
     root = _resolve_project_root()
     try:

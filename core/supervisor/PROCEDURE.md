@@ -99,6 +99,12 @@ rm -f supervisor-state-<project>.json
 
 ## 5. 파트 세션 spawn (설계 §4.3, Phase 16 실측 반영)
 
+### spawn 전 — 지시서를 저장소 실물과 대조한다 (조언용 · 2026-09-19 호스트 절차에서 일반화, Phase 19)
+
+`python3 ~/.claude/supervisor/tools/instruction-check.py <워크트리>/<docs>/PHASE<N>_*.tasks/task<k>.md --repo <워크트리>` — 보는 것은 둘뿐이다: 지시서가 시키는 **명령이 파트 허용 목록(`.claude/part-allowed-tools.txt`)에 있는가**(`VAR=…` 접두·목록 밖 스크립트는 파트가 거부당해 헛돈다) · 가리키는 **경로가 실재하고 `파일:줄` 이 파일 길이 안인가**(낡은 참조). `--xref` 는 짝 테스트·참조 파일 누락도 나열하지만 시끄럽다.
+- 「발견 없음」은 「지시서가 옳다」가 아니다 — 거짓 전제·설계 누락·빠진 열거값은 코드를 읽고 추론해야 하며, 리뷰어·파트의 검증을 줄이는 근거로 쓰지 않는다.
+- exit `0` = 돌았다(발견 유무 무관) · `2` = 입력을 못 읽었다. 가드가 아니다 — 출력을 읽고 지시서를 고친 뒤 spawn 한다.
+
 `run_in_background` 로 한 줄 실행. `cd` 는 서브셸 안에서만. `< /dev/null` 필수(stdin 대기 경고 방지).
 
 

@@ -1,6 +1,6 @@
 ---
 kind: queue
-updated: 2026-09-02
+updated: 2026-09-24
 ---
 
 # 페이즈 큐 — aigsprac
@@ -13,10 +13,13 @@ updated: 2026-09-02
 | id | slug | 근거 문서 | 선행 | 위험 | approved | 상태 |
 |---|---|---|---|---|---|---|
 | K-SH1 | supervisor-hardening | [PHASE17_supervisor-hardening.md](PHASE17_supervisor-hardening.md) (원 근거: `~/docs/2026-09-02-prime-agent-review.md` §2 상 A1~A4 + 감독 시작 계층 키트 이관) | Phase 16 supervisor-bootstrap — **done** (PR #14) | 보통 — 스크립트·프로토콜·설치 매니페스트, 감독 상태 파일 스키마 변경(`owner`) 포함 | **true** (사용자 승인 2026-09-02 "좋아, 추가해보자") | **done** (Phase 17 — 파트 17-1~17-4, 마감 커밋까지. 병합·`phase-close` 는 감독) |
-| K-RD1 | run-delegation-reconcile | 동료 세션 인계 2026-09-02 + 감독 실측: 킷 정본 `f3cad341` 을 쓰는 프로젝트가 **0** 인 4판 드리프트(`340a88c1` console·bot / `7a0cb7c7` polybuilder / `e7f479e1` s-orch·dashboard·k-stock·cloak) | K-SH1 | **높음** — 전 프로젝트 위임 경로. tobuilder-console 의 미커밋 로컬 수정(프로젝트 로컬 model-policy 폴백·한도 시그니처 확장) 흡수 선행, 단순 덮어쓰기 금지 | **true** (사용자 승인 2026-09-02) | pending |
+| K-RD1 | run-delegation-reconcile | 동료 세션 인계 2026-09-02 + 감독 실측: 킷 정본 `f3cad341` 을 쓰는 프로젝트가 **0** 인 4판 드리프트(`340a88c1` console·bot / `7a0cb7c7` polybuilder / `e7f479e1` s-orch·dashboard·k-stock·cloak) | K-SH1 | **높음** — 전 프로젝트 위임 경로. tobuilder-console 의 미커밋 로컬 수정(프로젝트 로컬 model-policy 폴백·한도 시그니처 확장) 흡수 선행, 단순 덮어쓰기 금지 | **true** (사용자 승인 2026-09-02) | **done** (Phase 18 — PR #19 병합 2026-09-24 · `phase-close` 완료. 각 프로젝트 전파는 별도) |
 | K-OC2 | serve-freshness-check | 동료 세션 인계 2026-09-02 + 감독 실측: 킷 `core/scripts/opencode-serve-ctl.sh`(281줄)에 신선도 개념 없음, `~/.local/bin/model-doctor-cron.sh`·`opencode-autoupdate.sh` 는 매니페스트에 없는 호스트 전용 자산 | K-RD1 | 보통 — 크론·serve 수명주기. `/proc` 의존이라 macOS 대응 필요(현행 판의 **조용한 skip** 을 그대로 옮기지 말 것) | **true** (사용자 승인 2026-09-02) | pending |
 | K-SH2 | supervisor-hardening-2 | `~/docs/2026-09-02-prime-agent-review.md` §2 중 B1~B7 + PITFALLS 39(접미사 task 조회 누락) + Phase 17 잔여(지시서 "후속 제안"·"구조 리뷰") | K-SH1 — **done** | 보통 | false — **K-SH1 실측 완료, `approved` 판단 대상**(사용자 확인 필요) | pending |
 | K-SH3 | escalation-resume-injection | 같은 보고서 §2 B8 — `claude -p --resume` 이 `--allowedTools`·`--append-system-prompt-file` 을 유지하는지 드라이 런 선행 | K-SH1 — **done** · 드라이 런 결과 | ⚠️ "파트=프로세스" 원칙의 예외 — 드라이 런 결과에 따라 방향 결정 필요 | false | blocked (드라이 런 미실시) |
+| K-PR2 | procedure-selective-port | `~/docs/2026-09-23-aigsparc-drift-report.md` §4 — 호스트 `~/.claude/supervisor/PROCEDURE.md` 2,492줄 vs 키트 `core/supervisor/PROCEDURE.md` 169줄(2026-09-24). 판별 질문 넷(주어·목적어 치환 가능 / 명령형 한 문장 / 기제가 하네스·도구 소속 / 40줄 초과는 서술) · 상한 400줄 · 프로젝트 명사 0 게이트 | Phase 19 — **done** (instruction-check 절 이식) | 보통 — 감독 절차 정본. 호스트 사건 기록(계수·표본·논쟁)은 옮기지 않는다 | false — 사용자 확인 필요 | pending |
+| K-EC1 | ecc-rules-pack-isolation | 같은 보고서 §3 + 홈 세션 2026-09-20 실측: 전역 ECC 언어 규칙 팩이 `.ts` Read 한 번에 19파일 104K자 로드 → 쓰지 않는 13팩을 `~/.claude/ecc-rules-inactive/` 로 격리해 6파일 18K자(-83%). `install.sh` 의 ECC 단계에 격리(팩 목록 인자, 되돌리기 명령 포함)를 넣고 `kit-doctor` 가 재설치 뒤 재격리 필요를 검사 | 없음 | 낮음 — 설치 단계 추가. ECC 인스톨러는 `rules/` 통째라 설치 후 격리가 유일한 레버 | false — 사용자 확인 필요 | pending |
+| K-HL1 | herdr-launcher-adapter | 같은 보고서 §3 — 호스트 `~/.local/bin/supervise-session.sh`(herdr named session + 프로젝트별 workspace, 2026-09-14 tmux 에서 전환)는 키트에 원본이 없다. 선택 어댑터로 | herdr 배포 경로 확인 | 보통 — 선택 설치 | false | blocked (배포 경로 미확인) |
 
 ## K-RD1 방향 (사용자 결정 2026-09-02)
 

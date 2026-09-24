@@ -43,23 +43,58 @@ def state_dir() -> Path:
     return d
 
 
-def sh(args, cwd=None, check=True, timeout=60):
+def sh(args, cwd=None, check=True, timeout=60, env=None):
     return subprocess.run(
         [str(a) for a in args], cwd=cwd, check=check, timeout=timeout,
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
+
+
+# 출처: 프로젝트 저장소 phase-tools 수선 판(2026-09-19 「루트 해석을 스크립트 위치로 앵커 + git 위치 env 정화」,
+# 2026-09-20 형제 저장소에 그대로 이식·바이트 동일 확인)을 Phase 19 에서 키트 원본으로 들여왔다.
+# GIT_DIR·GIT_COMMON_DIR·GIT_WORK_TREE 만 지운다. GIT_CONFIG_* 는 테스트 픽스처가 격리용으로 쓰므로 보존한다
+# (root-resolution 테스트 C1 이 env 를 걸고 두 함수를 직접 호출해 잰다).
+def _clean_git_env():
+    env = os.environ.copy()
+    for name in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+        env.pop(name, None)
+    return env
 
 
 def git(root, *args, check=True, timeout=60):
-    return sh(["git", "-C", root, *args], check=check, timeout=timeout)
+    return sh(["git", "-C", root, *args], check=check, timeout=timeout,
+               env=_clean_git_env())
 
 
 def find_root() -> Path:
     """워크트리 안에서 실행돼도 메인 체크아웃 루트를 돌려준다."""
-    r = sh(["git", "rev-parse", "--git-common-dir"])
-    common = Path(r.stdout.strip())
-    if not common.is_absolute():
-        common = (Path.cwd() / common).resolve()
-    return common.parent
+    script_dir = Path(__file__).resolve().parent
+    anchor = git(script_dir, "rev-parse", "--git-common-dir", check=False)
+    if anchor.returncode != 0 or not anchor.stdout.strip():
+        raise SystemExit(
+            f"스크립트 저장소를 해석할 수 없다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}): {anchor.stderr.strip()}")
+    anchor_common = Path(anchor.stdout.strip())
+    if not anchor_common.is_absolute():
+        anchor_common = (script_dir / anchor_common).resolve()
+    anchor_root = anchor_common.parent.resolve()
+
+    cwd_result = sh(["git", "rev-parse", "--git-common-dir"], check=False,
+                    env=_clean_git_env())
+    if cwd_result.returncode != 0 or not cwd_result.stdout.strip():
+        raise SystemExit(
+            f"cwd 저장소를 해석할 수 없다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, anchor_root={anchor_root}, "
+            f"cwd_root=None): {cwd_result.stderr.strip()}")
+    cwd_common = Path(cwd_result.stdout.strip())
+    if not cwd_common.is_absolute():
+        cwd_common = (Path.cwd() / cwd_common).resolve()
+    cwd_root = cwd_common.parent.resolve()
+    if cwd_root != anchor_root:
+        raise SystemExit(
+            f"cwd 저장소가 스크립트 저장소와 다르다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, anchor_root={anchor_root}, "
+            f"cwd_root={cwd_root})")
+    return anchor_root
 
 
 def find_docs_root(main_root: Path) -> Path:
@@ -68,13 +103,36 @@ def find_docs_root(main_root: Path) -> Path:
     레지스트리는 메인, 문서는 cwd 체크아웃 우선(KF-13)으로 접근한다. git 밖이면
     메인 루트로 폴백하지 않고 명시 오류를 낸다.
     """
+    main_root = main_root.resolve()
+    # 여기만 미정화 env로 오염을 불일치로 드러내며, 바로 뒤 공통 디렉터리 계보 단언이 이를 받친다.
+    # 이 검사를 약화시키면 회귀한다 (고정: test_b3_* 및 C1b).
     r = sh(["git", "rev-parse", "--show-toplevel"], check=False)
     if r.returncode != 0 or not r.stdout.strip():
         raise SystemExit(
-            f"git 최상위를 해석할 수 없다 (cwd={Path.cwd()}): {r.stderr.strip()}")
+            f"git 최상위를 해석할 수 없다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, main_root={main_root}): "
+            f"{r.stderr.strip()}")
     top = Path(r.stdout.strip()).resolve()
     if not (top / ".git").exists():
-        raise SystemExit(f"해석된 최상위에 .git 이 없다: {top}")
+        raise SystemExit(
+            f"해석된 최상위에 .git 이 없다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, main_root={main_root}, "
+            f"cwd_root={top}): {top}")
+    lineage = git(top, "rev-parse", "--git-common-dir", check=False)
+    if lineage.returncode != 0 or not lineage.stdout.strip():
+        raise SystemExit(
+            f"cwd 저장소 계보를 해석할 수 없다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, main_root={main_root}, "
+            f"cwd_root={top}): {lineage.stderr.strip()}")
+    common = Path(lineage.stdout.strip())
+    if not common.is_absolute():
+        common = (top / common).resolve()
+    lineage_root = common.parent.resolve()
+    if lineage_root != main_root:
+        raise SystemExit(
+            f"cwd 저장소 계보가 메인 저장소와 다르다 (cwd={Path.cwd()}, "
+            f"script={Path(__file__).resolve()}, main_root={main_root}, "
+            f"cwd_root={top}, lineage_root={lineage_root})")
     return top
 
 
@@ -611,15 +669,48 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     return 0
 
 
-def retry_guard_snapshot() -> str:
-    """현재 git 워크트리의 내용 기반 스냅샷 해시를 반환한다."""
+def retry_guard_snapshot(anchor_root: Path | None = None) -> str:
+    """현재 git 워크트리의 내용 기반 스냅샷 해시를 반환한다.
+
+    ``anchor_root``를 주면 현재 트리의 ``--git-common-dir`` 부모가 앵커와
+    같은 저장소 계보인지 대조한다. 디렉터리 자체가 같은지 대조하는 것이
+    아니므로, 링크된 워크트리에서는 그 워크트리 자신을 해시한다. ``GIT_DIR``,
+    ``GIT_COMMON_DIR``, ``GIT_WORK_TREE``가 환경에 있으면 다른 트리를
+    조용히 해시하지 않고 ``SystemExit``로 거부하며, 계보가 달라도
+    ``SystemExit``로 거부한다. 이 ``SystemExit``는 ``BaseException``이므로
+    ``cmd_retry_guard``의 ``except (...)`` 절에 걸리지 않고, 메시지를 남긴
+    뒤 프로세스를 종료한다.
+    """
+    polluted = [name for name in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")
+                if name in os.environ]
+    if polluted:
+        raise SystemExit(
+            f"retry-guard git 환경변수를 거부했다 (cwd={Path.cwd()}, "
+            f"변수={', '.join(polluted)})")
     root_result = subprocess.run(
         ("git", "rev-parse", "--show-toplevel"), cwd=Path.cwd(),
-        capture_output=True, text=False, timeout=60)
+        capture_output=True, text=False, timeout=60, env=_clean_git_env())
     if root_result.returncode != 0:
         stderr = root_result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"git 최상위 해석 실패: {stderr}")
     root = Path(os.fsdecode(root_result.stdout).strip()).resolve()
+    if anchor_root is not None:
+        lineage = git(root, "rev-parse", "--git-common-dir", check=False)
+        if lineage.returncode != 0 or not lineage.stdout.strip():
+            raise SystemExit(
+                f"retry-guard 저장소 계보를 해석할 수 없다 (cwd={Path.cwd()}, "
+                f"root={root}, anchor_root={Path(anchor_root).resolve()}): "
+                f"{lineage.stderr.strip()}")
+        common = Path(lineage.stdout.strip())
+        if not common.is_absolute():
+            common = (root / common).resolve()
+        lineage_root = common.parent.resolve()
+        resolved_anchor = Path(anchor_root).resolve()
+        if lineage_root != resolved_anchor:
+            raise SystemExit(
+                f"retry-guard 저장소 계보가 앵커와 다르다 (cwd={Path.cwd()}, "
+                f"root={root}, anchor_root={resolved_anchor}, "
+                f"lineage={lineage_root})")
     commands = (
         ("git", "status", "-z", "-uall"),
         ("git", "diff", "--binary", "HEAD"),
@@ -628,7 +719,8 @@ def retry_guard_snapshot() -> str:
     results = []
     for command in commands:
         result = subprocess.run(
-            command, cwd=root, capture_output=True, text=False, timeout=60)
+            command, cwd=root, capture_output=True, text=False, timeout=60,
+            env=_clean_git_env())
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"git 명령 실패 ({' '.join(command)}): {stderr}")
@@ -721,6 +813,15 @@ def cmd_retry_guard(args: argparse.Namespace) -> int:
         print(f"retry-guard 오류: phase는 십진 정수여야 한다: {args.phase}",
               file=sys.stderr)
         return 1
+    # 아래 git 호출은 모두 호출 지점에서 env=_clean_git_env()로 매번 정화되어
+    # 서브프로세스 동작을 바꾸지 않는다. 여기서는 CLI 경로만 자동 정화해 오염된
+    # env가 판정을 바꾸지 않게 하며(test_b2~test_b4는 계속 rc=3), 직접 호출하는
+    # retry_guard_snapshot()은 fail-closed로 거부한다(test_a2~test_a4). 뒤의
+    # supervisor-state.sh에 넘길 os.environ.copy() 자식 env도 정화한다. 이 작업을
+    # main()이나 임포트 시점에 하지 않는 것은 find_docs_root()의 의도적인 미정화
+    # 프로브 동작이 테스트로 고정되어 있기 때문이다.
+    for name in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+        os.environ.pop(name, None)
     try:
         root = find_root()
         state_path, project, xdg_state = retry_guard_state_location(args, root)
@@ -735,7 +836,7 @@ def cmd_retry_guard(args: argparse.Namespace) -> int:
         state = json.loads(raw_state)
         if not isinstance(state, dict):
             raise ValueError("상태 JSON은 객체여야 한다")
-        snapshot = retry_guard_snapshot()
+        snapshot = retry_guard_snapshot(root)
     except (OSError, ValueError, json.JSONDecodeError, RuntimeError,
             subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(f"retry-guard 오류: {error}", file=sys.stderr)

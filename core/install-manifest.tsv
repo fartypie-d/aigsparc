@@ -9,5 +9,6 @@ any	file	core/scripts/supervisor-state.sh	.local/bin/supervisor-state.sh
 any	seed	core/skillpack/packs.conf.example	.config/skillpack-update/packs.conf
 claude	tree	adapters/claude/global/skills	.claude/skills
 claude	file	core/supervisor/PROCEDURE.md	.claude/supervisor/PROCEDURE.md
+claude	tree	core/supervisor/tools	.claude/supervisor/tools
 claude	tree	adapters/claude/global/commands	.claude/commands
 codex	tree	adapters/codex/global/prompts	.codex/prompts

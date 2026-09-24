@@ -1,4 +1,4 @@
-# aigsprac
+# aigsparc
 
 > 구 **dev-orchestrate-kit**
 

@@ -1538,9 +1538,27 @@ class SignatureAnchorTest(unittest.TestCase):
     # 그 경계를 고정한다 — 산출물의 `Error:` 산문은 한도 실패가 아니다.
     AGENT_PROSE_ERROR_LINE = "Error: 예상한 ZodError 가 아니라 TypeError 가 났다 — 구현을 고쳐라"
     # 음성: FAIL_RE 키워드를 담은 영문 산문. 줄 시작 앵커가 없으면 이 줄이 폴백을 유발한다
-    # (`rate limit` 이 FAIL_RE 에 있다). 클라이언트 배너는 자기 줄을 차지하므로 들여쓴 줄은
-    # 배너가 아니라는 계약을 여기서 고정한다.
-    INDENTED_PROSE_WITH_LIMIT_WORDS = "    Error: rate limit backoff is missing in the retry logic"
+    # (`rate limit` 이 FAIL_RE 에 있다). Phase 18 이전에는 "들여쓴 `Error:` 는 배너가 아니다" 로
+    # 고정했지만, 하류 정본 저장소(백엔드, `3622784` 2026-09-09)가 실측한 배너 바이트가
+    # `\033[2m  \033[1mError:` — 색 코드와 **공백**이 섞여 앞선다 — 라서 공백만 앞선 `Error:` 는
+    # 이제 배너로 본다. 앵커가 여전히 막는 것은 불릿·박스문자·산문 뒤에 오는 `Error:` 다.
+    BULLETED_PROSE_WITH_LIMIT_WORDS = "  - Error: rate limit backoff is missing in the retry logic"
+    # 양성: 위 실측 바이트 그대로 — 공백+색 코드 혼합 접두 (backend selftest `ansi_indented`).
+    REAL_ANSI_INDENTED_402 = "\x1b[2m  \x1b[1mError: \x1b[0mstatus 402 out of credits"
+    # 양성: openai OAuth 만료 배너 (하류 저장소(봇) `eeb3c2f` 2026-09-03 파트 7-1 에서 3회 실측 —
+    # default·heavy 두 tier 가 exit 0 · DONE · 산출물 0 으로 끝나 폴백이 한 번도 안 돌았다).
+    REAL_TOKEN_EXPIRED = "Error: Provided authentication token is expired."
+    # 음성: 401 문자열 **만으로는** 실패가 아니다. 하류 저장소(콘솔) 판은 `status.?401|unauthorized` 를
+    # FAIL_RE 에 넣었지만 backend 가 "우리 도메인(401/403 의미론)에선 평범한 테스트 실패가 발화한다" 고
+    # 실측 2건으로 반려했다(`0952b63` 2026-09-09). 키트는 그 축을 넣지 않는다 — 이 픽스처가 그 경계다.
+    STATUS_401_ONLY = "Error: Request failed with status 401 Unauthorized"
+    # 음성: PR #19 리뷰 반례 4건 — 프로바이더 무관 문장이 `ERROR` 갈래(앵커 없음)로 들어와 발화했다.
+    # `limit.*(reached|exceeded)` 는 주어를 한정하고, `authentication … (expired|failed|required)` 는
+    # 인접 형태로 좁힌다. 오탐은 완료된 위임을 통째로 버린다(이 클래스 도크스트링).
+    REVIEW_POOL_LIMIT_EXCEEDED = "ERROR  connection pool limit exceeded, queueing new request"
+    REVIEW_DB_LIMIT_REACHED = "ERROR  db pool: max_connections limit reached, waiting for slot"
+    REVIEW_AUTH_TEST_FAILED = "ERROR  test suite: authentication test failed — session cookie missing"
+    REVIEW_AUTH_REQUIRED_PROSE = "ERROR  spec: user authentication required before checkout, test failed"
 
     # --- 음성: 실제 아카이브 로그에서 가져온 라인 ---
     REAL_INFO_402 = ('timestamp=2026-08-08T07:47:11.402Z level=INFO run=ee71666e '
@@ -1616,12 +1634,64 @@ class SignatureAnchorTest(unittest.TestCase):
         """
         self._assert_not_a_limit_error(self.AGENT_PROSE_ERROR_LINE)
 
-    def test_indented_prose_error_line_is_not_a_limit_error(self):
-        """들여쓴 산출물 `Error:` 는 FAIL_RE 키워드를 담아도 배너가 아니다 (줄 시작 앵커).
+    def test_bulleted_prose_error_line_is_not_a_limit_error(self):
+        """불릿 뒤 산출물 `Error:` 는 FAIL_RE 키워드를 담아도 배너가 아니다 (줄 시작 앵커).
 
         소문자 확장의 대가를 좁히는 방어선이다 — 앵커를 지우면 이 테스트가 먼저 깨진다.
+        Phase 18 에서 픽스처를 "공백 들여쓰기" 에서 "불릿" 으로 바꿨다 — 공백만 앞선 `Error:` 는
+        실측 배너 형태라 이제 양성이다(`test_real_ansi_indented_banner_triggers_fallback`).
         """
-        self._assert_not_a_limit_error(self.INDENTED_PROSE_WITH_LIMIT_WORDS)
+        self._assert_not_a_limit_error(self.BULLETED_PROSE_WITH_LIMIT_WORDS)
+
+    def test_real_ansi_indented_banner_triggers_fallback(self):
+        """공백+색 코드 혼합 접두의 배너도 폴백 대상이다 (backend `3622784`, Phase 18 RED)."""
+        self._assert_treated_as_limit_error(self.REAL_ANSI_INDENTED_402)
+
+    def test_token_expired_banner_triggers_fallback(self):
+        """OAuth 만료 배너는 폴백 대상이다 (bot `eeb3c2f` · backend `bc1ab67`, Phase 18 RED).
+
+        한도 초과는 프로바이더 하나만 죽지만 인증 만료는 그 프로바이더의 **모든 tier** 를 죽인다 —
+        미탐이면 정책 파일에 살아 있는 다른 프로바이더가 한 번도 시도되지 않는다.
+        """
+        self._assert_treated_as_limit_error(self.REAL_TOKEN_EXPIRED)
+
+    def test_status_401_alone_is_not_a_limit_error(self):
+        """401 문자열만 담은 줄 시작 `Error:` 는 폴백 대상이 **아니다** (console 축 미채택, Phase 18).
+
+        `no api key`·`authentication failed` 처럼 좁힌 인증 문구만 잡는다. 이 테스트가 깨지면
+        누군가 `status.?401|unauthorized|forbidden` 을 FAIL_RE 에 들여온 것이다 — backend 실측
+        2건(`ERROR  test failed: expected 403 forbidden …`)이 오탐으로 발화하는 축이다.
+        """
+        self._assert_not_a_limit_error(self.STATUS_401_ONLY)
+
+    def test_pool_limit_exceeded_prose_is_not_a_limit_error(self):
+        """`limit exceeded` 만으로는 실패가 아니다 — 주어(usage·spending·quota·…)가 있어야 한다 (리뷰 반례)."""
+        self._assert_not_a_limit_error(self.REVIEW_POOL_LIMIT_EXCEEDED)
+
+    def test_db_limit_reached_prose_is_not_a_limit_error(self):
+        """`limit reached` 만으로는 실패가 아니다 (리뷰 반례)."""
+        self._assert_not_a_limit_error(self.REVIEW_DB_LIMIT_REACHED)
+
+    def test_authentication_test_failed_prose_is_not_a_limit_error(self):
+        """`authentication … failed` 사이에 낱말이 끼면 배너가 아니다 — 인접 형태만 잡는다 (리뷰 반례)."""
+        self._assert_not_a_limit_error(self.REVIEW_AUTH_TEST_FAILED)
+
+    def test_authentication_required_prose_is_not_a_limit_error(self):
+        """`authentication required` 산문은 실패가 아니다 — 실측 픽스처가 어느 판에도 없어 `required` 는 뺀다 (리뷰 반례)."""
+        self._assert_not_a_limit_error(self.REVIEW_AUTH_REQUIRED_PROSE)
+
+    def test_long_error_lines_still_trigger_fallback(self):
+        """선택된 오류 줄이 파이프 버퍼(64KB)를 넘어도 한도 시그니처를 놓치지 않는다 (Phase 18 RED).
+
+        판정 파이프라인 끝이 `grep -q` 면 첫 매치에서 입력을 닫아 앞 단 grep 이 SIGPIPE(141)로
+        죽고, `set -o pipefail` 이 그 141 을 결과로 올려 **매치가 있어도 거짓**이 된다
+        (하류 저장소(콘솔) `e73422e` 2026-09-11 C-48 — 200/200 결정적 미탐). 49줄 × 4KB 로
+        버퍼를 넘기고 신호어는 첫 줄에 하나만 둔다(50줄 창 안에 들어오도록 세션 줄 포함 50줄).
+        """
+        pad = "x" * 4000
+        lines = ["Error: You have reached your usage limit for this model. " + pad]
+        lines += ["ERROR  provider response body %d %s" % (i, pad) for i in range(2, 50)]
+        self._assert_treated_as_limit_error(*lines)
 
     def test_normal_info_line_with_402_is_not_a_limit_error(self):
         """정상 INFO 라인의 타임스탬프 402 는 한도 실패가 아니다 (리뷰 예상 지점).
@@ -1666,3 +1736,174 @@ FILE="$DATE_COUNTER"; VALUE=0; [ -f "$FILE" ] && VALUE=$(cat "$FILE"); VALUE=$((
         result = self.run_script(CURL_SESSIONS_AFTER=session, DATE_COUNTER=str(self.root / "date-count"))
         self.assertEqual(result.returncode, 5, self._redacted(result))
         self.assertIn("재시도 루프 스톨", result.stdout, self._redacted(result))
+
+
+class DetectorParityTest(unittest.TestCase):
+    """탐지기(`model_error_in_log`) 판별력 고정 — 하류 정본 selftest 의 RED 케이스 이식 (Phase 18).
+
+    출처: 하류 정본 저장소의 `scripts/run-delegation.selftest.sh`(`3622784`→`0952b63`, 2026-09-09).
+    그 스크립트처럼 기대 문자열을 다시 쓰지 않고 **소스에서 네 정의를 추출해 실제로 실행**한다 —
+    FAIL_RE·ERROR_LINE_RE·error_signature_in_lines·model_error_in_log. 정의가 둘 이상이면 병합
+    잔재라 `grep -m1` 이 엉뚱한 것을 고르므로, 정확히 하나씩인지도 단언한다(backend `require_single`).
+    픽스처는 신호어를 **하나씩만** 담는다 — 한 줄에 여럿이면 하나를 지워도 다른 것이 매치해
+    개별 신호어의 커버리지를 가르지 못한다.
+    """
+
+    SYMBOLS = ("^FAIL_RE=", "^ERROR_LINE_RE=", "^error_signature_in_lines()", "^model_error_in_log()")
+    DRIVER = r"""
+set -uo pipefail
+SRC="$1"; FIXTURE="$2"
+for pat in '^FAIL_RE=' '^ERROR_LINE_RE=' '^error_signature_in_lines()' '^model_error_in_log()'; do
+  eval "$(grep -m1 "$pat" "$SRC")"
+done
+if model_error_in_log "$FIXTURE"; then echo fire; else echo quiet; fi
+"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def _verdict(self, *lines):
+        fixture = self.root / "fixture.log"
+        fixture.write_bytes(b"".join(line.encode() + b"\n" for line in lines))
+        result = subprocess.run(
+            ["bash", "-c", self.DRIVER, "driver", str(SOURCE), str(fixture)],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def _assert_fires(self, *lines):
+        self.assertEqual(self._verdict("INFO  service=session loop session.id=ses_1", *lines), "fire")
+
+    def _assert_quiet(self, *lines):
+        self.assertEqual(self._verdict("INFO  service=session loop session.id=ses_1", *lines), "quiet")
+
+    def test_detector_symbols_are_defined_exactly_once(self):
+        """네 정의가 행 시작에서 정확히 한 번씩 — 하류 selftest 가 같은 방식으로 추출한다."""
+        source = SOURCE.read_text()
+        for symbol in self.SYMBOLS:
+            with self.subTest(symbol=symbol):
+                count = len(re.findall(symbol.replace("(", r"\(").replace(")", r"\)"), source, re.M))
+                self.assertEqual(count, 1, "%s 정의가 %d 개" % (symbol, count))
+
+    # --- 양성: 한도·크레딧 (backend 2026-09-01 함정 — 구 정규식이 놓쳐 DONE+exit=0 으로 오보) ---
+    def test_usage_limit_banner_fires(self):
+        self._assert_fires("Error: You have reached your usage limit for this model.")
+
+    def test_status_402_banner_fires(self):
+        self._assert_fires("Error: Request failed with status 402")
+
+    def test_spending_limit_indented_banner_fires(self):
+        """공백 들여쓴 `Error:` 도 배너다 (backend 앵커 `^([[:space:]]|ESC)*Error:`)."""
+        self._assert_fires("  Error: spending limit for this workspace applies")
+
+    def test_out_of_credits_banner_fires(self):
+        self._assert_fires("Error: You are out of credits")
+
+    def test_insufficient_credit_banner_fires(self):
+        self._assert_fires("Error: insufficient credits on this account")
+
+    def test_limit_reached_banner_fires(self):
+        self._assert_fires("Error: monthly limit reached")
+
+    def test_credit_balance_too_low_banner_fires(self):
+        self._assert_fires("Error: Your credit balance is too low to run this request")
+
+    # --- 양성: 인증 만료·실패 (bot `eeb3c2f` 제보 → backend `bc1ab67`·`0952b63` 좁힌 채택) ---
+    def test_token_is_expired_banner_fires(self):
+        self._assert_fires("Error: token is expired")
+
+    def test_token_expired_without_is_fires(self):
+        self._assert_fires("Error: OAuth token expired, please re-authenticate")
+
+    def test_token_has_expired_fires(self):
+        """`(is|has)` 교대는 bot 오버레이(`eeb3c2f`)의 일반화 — backend 판은 `has` 형을 놓친다."""
+        self._assert_fires("Error: access token has expired")
+
+    def test_no_api_key_banner_fires(self):
+        """발화 근거는 `no api key` 다 — 같은 줄의 401 은 근거가 아니다(아래 401 단독 케이스와 짝)."""
+        self._assert_fires("Error: status 401 — no api key provided")
+
+    def test_authentication_failed_banner_fires(self):
+        self._assert_fires("Error: authentication failed for provider openai")
+
+    def test_api_key_missing_banner_fires(self):
+        self._assert_fires("Error: API key is missing")
+
+    def test_ai_retry_error_on_error_level_fires(self):
+        self._assert_fires("2026-09-01T19:00:00 ERROR service=session AI_RetryError: retry aborted")
+
+    # --- 양성: ANSI 색 코드가 붙은 실제 오류 (2026-09-01 실측 바이트 그대로) ---
+    def test_ansi_usage_limit_fires(self):
+        self._assert_fires("\x1b[91m\x1b[1mError: \x1b[0mThe usage limit has been reached")
+
+    def test_ansi_indented_mixed_prefix_fires(self):
+        self._assert_fires("\x1b[2m  \x1b[1mError: \x1b[0mstatus 402 out of credits")
+
+    # --- 양성: 긴 오류 줄 — 파이프 버퍼를 넘어도 발화 (console `e73422e` C-48) ---
+    def test_long_error_lines_fire(self):
+        pad = "x" * 4000
+        lines = ["ERROR  You have reached your usage limit for this model. " + pad]
+        lines += ["ERROR  provider response body %d %s" % (i, pad) for i in range(2, 51)]
+        self.assertEqual(self._verdict(*lines), "fire")
+
+    # --- 음성: 산출물이 오류를 *언급*하는 것은 실패가 아니다 ---
+    def test_ansi_prose_mid_line_error_is_quiet(self):
+        self._assert_quiet("\x1b[2m본문:\x1b[0m 로그에 Error: fetch failed 가 찍힌다")
+
+    def test_prose_mention_mid_line_is_quiet(self):
+        self._assert_quiet(
+            "완료 보고: 프록시 경유 라이브 드라이런 스펙을 추가했다.",
+            "재현 절차: NO_PROXY 없이 실행하면 Privy 호출이 막혀 Error: fetch failed 로 즉사한다.",
+            "테스트 13개 통과, exit=0.",
+        )
+
+    def test_domain_403_test_failure_is_quiet(self):
+        """`forbidden` 을 FAIL_RE 에 들이면 발화한다 — console 축을 넣지 않는 이유(backend 실측)."""
+        self._assert_quiet("ERROR  test failed: expected 403 forbidden but received 200")
+
+    def test_domain_401_spec_failure_is_quiet(self):
+        """`unauthorized` 를 FAIL_RE 에 들이면 발화한다 — 위와 같은 이유."""
+        self._assert_quiet("2026-09-09 ERROR vitest: openapi-security.spec.ts — unauthorized description missing reason")
+
+    def test_status_401_banner_alone_is_quiet(self):
+        """줄 시작 `Error:` 라도 401 문자열만으로는 실패가 아니다 (`status.?401` 미채택)."""
+        self._assert_quiet("Error: Request failed with status 401 Unauthorized")
+
+    def test_prose_token_expired_mid_line_is_quiet(self):
+        """본문이 FAIL_RE 에 실제로 매치하므로(`token is expired`) 침묵의 근거는 오직 앵커다."""
+        self._assert_quiet("재현 절차: 인증이 끊기면 Error: token is expired 가 찍힌다.", "테스트 8개 통과.")
+
+    def test_prose_quota_without_error_marker_is_quiet(self):
+        self._assert_quiet(
+            "Relayer 쿼터(quota)는 25/분이라 온보딩 큐가 이를 넘지 않아야 한다.",
+            "문서에 quota 초과 시 동작을 적었다.",
+        )
+
+    def test_clean_success_is_quiet(self):
+        self._assert_quiet("작업 완료. 테스트 22개 통과.")
+
+    # --- 음성: PR #19 리뷰 반례 — 프로바이더 무관 문장 (`ERROR` 갈래는 앵커가 없어 신호어 좁힘만이 방어선) ---
+    def test_pool_limit_exceeded_is_quiet(self):
+        self._assert_quiet("ERROR  connection pool limit exceeded, queueing new request")
+
+    def test_db_limit_reached_is_quiet(self):
+        self._assert_quiet("ERROR  db pool: max_connections limit reached, waiting for slot")
+
+    def test_authentication_test_failed_is_quiet(self):
+        self._assert_quiet("ERROR  test suite: authentication test failed — session cookie missing")
+
+    def test_authentication_required_prose_is_quiet(self):
+        self._assert_quiet("ERROR  spec: user authentication required before checkout, test failed")
+
+    def test_authentication_has_expired_fires(self):
+        """인접 형태 `authentication has expired` 는 잡는다 — 좁힘이 배너까지 지우지 않았는지."""
+        self._assert_fires("Error: authentication has expired, run auth login again")
+
+    def test_error_outside_50_line_window_is_quiet(self):
+        """검사 창 경계: 50줄 밖의 오류는 보지 않는다(설계 의도)."""
+        lines = ["Error: You have reached your usage limit for this model."]
+        lines += ["line %d 정상 진행" % i for i in range(1, 61)]
+        self.assertEqual(self._verdict(*lines), "quiet")

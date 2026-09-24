@@ -267,13 +267,37 @@ set +a
 # 막지 못하므로 FAIL_RE를 좁게 유지하며, 402도 status 문맥에서만 잡는다.
 # 라인 필터는 대문자 `ERROR`(구조화 로그)와 소문자 `Error:`(클라이언트 배너, ANSI 색상 접두가
 # 붙는다)를 함께 본다 — 2026-09-01 실측에서 한도 라인이 후자 형식이라 폴백이 통째로 안 걸렸다.
-# 소문자 쪽은 **줄 시작**(ANSI 색상 코드만 앞설 수 있음)으로 앵커한다. 클라이언트 배너는 자기
-# 줄을 차지하지만 에이전트 산출물의 "Error:" 는 들여쓰기·박스문자 뒤에 오므로, 앵커가 산출물
+# 소문자 쪽은 **줄 시작**(ANSI 색상 코드와 공백만 앞설 수 있음)으로 앵커한다. 클라이언트 배너는 자기
+# 줄을 차지하지만 에이전트 산출물의 "Error:" 는 불릿·박스문자·산문 뒤에 오므로, 앵커가 산출물
 # 오탐 표면을 좁힌다. 그래도 줄 시작에 온 영문 산문이 FAIL_RE 키워드를 함께 담으면 오탐이
 # 가능하다 — 대문자 `ERROR` 에 이미 있던 한계와 같은 종류이며, FAIL_RE 를 좁게 유지해 막는다.
-FAIL_RE='status.?429|rate.?limit|quota|resource_exhausted|insufficient_quota|too.?many.?requests|overloaded|exceeded.*(limit|quota)|AI_APICallError|AI_RetryError|ProviderAuthError|ECONNREFUSED|fetch failed|status.?402|insufficient[[:space:]_-]+credits|credit[[:space:]_-]+balance[[:space:]_-]+is[[:space:]_-]+too[[:space:]_-]+low|usage[[:space:]_-]+limit[[:space:]_-]+(has[[:space:]_-]+been[[:space:]_-]+)?reached'
-ERROR_LINE_RE="ERROR|^($(printf '\033')\[[0-9;]*m)*Error:"
-error_signature_in_lines() { grep -aE "$ERROR_LINE_RE" | grep -qiE "$FAIL_RE"; }
+# Phase 18 조정(K-RD1, 하류 4판 대조 — 출처는 각 줄 주석):
+# - 앵커에 공백 허용: 실측 배너 바이트가 `\033[2m  \033[1mError:` 라 공백 없는 앵커는 이것을 놓쳤다
+#   (하류 정본 저장소(백엔드) `3622784` 2026-09-09 정기 점검, selftest RED). 대가로 "공백만 들여쓴 산출물
+#   Error:" 는 배너로 본다 — 미탐(성공으로 위장한 실패)이 오탐(폴백 1회)보다 비싸다.
+#   근거는 한쪽 실측뿐이다: 반대편(공백만 들여쓴 산출물 `Error:` 줄이 FAIL_RE 낱말과 함께 나오는 빈도)은
+#   미측정이며 「미탐 비용 > 오탐 비용」 판단으로 받아들였다(PR #19 리뷰 지적).
+# - 한도 문구 확장 `spending limit`·`usage limit`·`out of credits`·`insufficient credit`·`<주어> … limit … reached|exceeded`
+#   (하류 정본 저장소(백엔드) `3622784` 2026-09-09 · 하류 저장소(봇) `9b6698f` 2026-09-02 KF-16 실측 2종).
+#   backend 의 `limit.*(reached|exceeded)` 는 주어를 한정했다(PR #19 리뷰 HIGH): `ERROR` 갈래는 앵커가 없어
+#   `connection pool limit exceeded`·`max_connections limit reached` 같은 프로바이더 무관 줄이 발화했다.
+#   주어 목록(usage·spending·rate·quota·token·credit·monthly·daily·weekly·billing·plan·account)은 관측 배너와
+#   backend 픽스처(`monthly limit reached`)에서 귀납 — 놓치는 배너가 나오면 픽스처와 함께 목록에 넣는다.
+# - 인증 축은 **좁힌 형태만**: `token (is|has) expired`(하류 저장소(봇) `eeb3c2f` 2026-09-03 파트 7-1 에서
+#   3회 실측 — 두 tier 모두 exit 0·DONE·산출물 0 으로 폴백이 한 번도 안 돌았다 · backend `bc1ab67` 2026-09-09),
+#   `no api key`·`api key missing|not provided|invalid`·`authentication (has)? expired|failed`
+#   (backend `0952b63` 2026-09-09 — 그쪽 `authentication … .*(expired|failed|required)` 는 인접 형태로 좁혔다:
+#   `authentication test failed` 같은 테스트 실패 줄이 발화했고(PR #19 리뷰), `required` 는 어느 판의
+#   selftest 에도 양성 픽스처가 없어 뺐다). 하류 저장소(콘솔) 판의 `status.?401|unauthorized|forbidden` 은 **넣지 않는다**
+#   — 401/403 을 다루는 저장소의 평범한 테스트 실패 줄(`ERROR  test failed: expected 403 forbidden …`)이
+#   발화해 성공한 위임을 버린다(backend 실측 2건). 저장소마다 산출물 어휘가 다르므로 형제 정규식을 통째로 들이지 않는다.
+FAIL_RE='status.?429|rate.?limit|quota|resource_exhausted|insufficient_quota|too.?many.?requests|overloaded|exceeded.*(limit|quota)|AI_APICallError|AI_RetryError|ProviderAuthError|ECONNREFUSED|fetch failed|status.?402|insufficient[[:space:]_-]+credits|credit[[:space:]_-]+balance[[:space:]_-]+is[[:space:]_-]+too[[:space:]_-]+low|usage[[:space:]_-]+limit[[:space:]_-]+(has[[:space:]_-]+been[[:space:]_-]+)?reached|spending.?limit|usage.?limit|out of credits|insufficient.?credit|(^|[^[:alnum:]_])(usage|spending|rate|quota|token|credit|monthly|daily|weekly|billing|plan|account).{0,40}limit.{0,40}(reached|exceeded)|token[[:space:]_-]+((is|has)[[:space:]_-]+)?expired|no api.?key|api.?key.*(missing|not provided|invalid)|authentication[[:space:]_-]+(has[[:space:]_-]+)?(expired|failed)'
+ERROR_LINE_RE="ERROR|^([[:space:]]|$(printf '\033')\[[0-9;]*m)*Error:"
+# 판정 grep 에 `-q` 를 쓰지 않는다 — `-q` 는 첫 매치에서 입력을 닫아 아직 쓰던 앞 단 grep 을 SIGPIPE(141)로
+# 죽이고, 이 스크립트는 `set -o pipefail` 이라 그 141 이 파이프라인 결과가 되어 **매치가 있어도 거짓**이 된다.
+# 선택된 줄이 파이프 버퍼 64KB 를 넘으면 결정적이다(하류 저장소(콘솔) `e73422e` 2026-09-11 C-48, 200/200 미탐 ·
+# 키트 판 재현 0/50 → 수정 후 50/50). 끝까지 읽고 출력만 버린다.
+error_signature_in_lines() { grep -aE "$ERROR_LINE_RE" | grep -iE "$FAIL_RE" >/dev/null; }
 model_error_in_log() { tail -n 50 "$1" | error_signature_in_lines; }
 # 클라이언트는 시작 직후 생 따옴표 형식으로 이 경고를 낸다. 산출물 본문 오탐을 막기 위해
 # 배너는 19번째 줄이지만 에이전트 산출물은 43번째 줄부터 관측됐다. 40줄로 낮출 여유가 약 40줄이나,

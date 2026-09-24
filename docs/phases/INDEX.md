@@ -1,10 +1,13 @@
 # docs/phases 인덱스 (자동 생성 — `scripts/docs-index.py`)
 
-> 21개 페이즈 문서. 과거 작업은 이 표를 스캔 → 문서 열기 → `git show <commit>`.
+> 24개 페이즈 문서. 과거 작업은 이 표를 스캔 → 문서 열기 → `git show <commit>`.
 > 표는 수정하지 말 것 (재생성 시 덮어씀). 신규 문서에 frontmatter를 달면 정확히 반영된다.
 
 | Phase | Date | Kind | Domain | Status | Summary | 문서 | Commits |
 |---|---|---|---|---|---|---|---|
+| 20 | 2026-09-23 | task | template, commands, tests, docs | done | 파트 계약 파일 수선(죽은 허용목록 3줄 은퇴·프로토콜 일반 규율 4건 이식·rules/ 컨벤션·QUEUE 템플릿) + /restart-prep | [PHASE20_part-contract-and-restart-prep.md](PHASE20_part-contract-and-restart-prep.md) | cc5bcc8..dbed45f (+ 마감 커밋) |
+| 19 | 2026-09-23 | task | scripts, supervisor, install, tests, docs | done | phase-tools 루트 해석 앵커·git 위치 env 정화 + docs-index 전순서 정렬 이식(묶음 1) · 감독 도구 instruct | [PHASE19_scripts-and-supervisor-tools.md](PHASE19_scripts-and-supervisor-tools.md) | 387f7fa..eece5df (+ 마감 커밋) |
+| 18 | 2026-09-23 | task | scripts, tests, docs | done | run-delegation 4판 드리프트 통합(K-RD1) — 하류 정본(tobuilder-backend)의 한도·인증 문구와 공백 앵커, co | [PHASE18_run-delegation-reconcile.md](PHASE18_run-delegation-reconcile.md) | a91f229..d51c4b6 (+ 마감 커밋) |
 | 17 | 2026-09-02 | task | scripts, install, tests, docs | done | 감독 계층 하드닝 — 감독 시작 계층(PROCEDURE·supervise 커맨드)을 키트로 이관 + owner PID 리스(A1)·원자 쓰기(A | [PHASE17_supervisor-hardening.md](PHASE17_supervisor-hardening.md) | 4af2824..2ec0dfc (+ 마감 커밋, 로컬 32개) |
 | 16 | 2026-09-02 | task | scripts, tests, docs | done | 감독 체계 선행 — phase-tools tasks 워크트리 해석(KF-13)·session-cost --project/--session(KF- | [PHASE16_supervisor-bootstrap.md](PHASE16_supervisor-bootstrap.md) | 16825fa..b5f98ba (+ 마감 커밋) |
 | 15 | 2026-09-01 | task | scripts, tests, docs | done | 위임 모델 정책의 프로젝트 스코프화(.claude/model-policy.json) + 크레딧·한도 실패 시그니처를 좁은 앵커로 확장 — 초안  | [PHASE15_model-policy-scope.md](PHASE15_model-policy-scope.md) | 7398461..0bc05dd |
@@ -12,8 +15,8 @@
 | 14 | 2026-09-01 | task | scripts, docs | done | tobuilder-bot 실적용 피드백(KF-1·KF-2) 반영 — docs-index가 DESIGN_·PLAN_ 문서를 인덱싱·kind 추론하 | [PHASE14_kf-docs-index.md](PHASE14_kf-docs-index.md) | 587c46f..66abab4 (7개 — feat 1 · fix 1 · test 2 · docs 3) |
 | 13 | 2026-08-19 | task | scripts, docs | done | 위임 계측(.wrapper 로그·reject_cause)·총 벽시계 캡·구조 리뷰어 신설 | [PHASE13_delegation-observability.md](PHASE13_delegation-observability.md) | 05d4ccf..74c3717 (21개 — feat 3 · fix 4 · test 4 · docs 10) |
 | 13 | 2026-08-19 | review | scripts, docs | done | 위임 관측성·안정성 페이즈의 리뷰 총괄 — 반려 3라운드 + 구조 리뷰어 첫 가동 결과 | [PHASE13_delegation-observability.md](reviews/PHASE13_delegation-observability.md) | 05d4ccf..74c3717 |
-| 12 | 2026-09-01 | plan | scripts, tests, docs | draft | 위임 모델 정책의 프로젝트별 분리 + 한도 실패 시그니처 확장 — bash-reviewer REJECT 판정과 재현 근거, 착수 시 이 문서를  | [PLAN_model-policy-scope.md](PLAN_model-policy-scope.md) | - |
 | 12 | 2026-09-01 | task | scripts, tests | done | 진입점별 KIT·프로젝트 루트 해석 통일 — scripts/ 심링크와 core/scripts/ 실경로 어느 쪽으로 불러도 같은 루트가 나오게 ( | [PHASE12_doctor-symlink-entrypoint.md](PHASE12_doctor-symlink-entrypoint.md) | 75eb80c..05308ba (10개 — fix 3 · test 5 · docs 2) |
+| 12 | 2026-09-01 | plan | scripts, tests, docs | draft | 위임 모델 정책의 프로젝트별 분리 + 한도 실패 시그니처 확장 — bash-reviewer REJECT 판정과 재현 근거, 착수 시 이 문서를  | [PLAN_model-policy-scope.md](PLAN_model-policy-scope.md) | - |
 | 11 | 2026-08-17 | task | scripts, skill | done | task 상태 기계판독화 — task 파일 frontmatter(status) + phase-tools tasks 서브커맨드 (Ralph 패턴  | [PHASE11_task-status-frontmatter.md](PHASE11_task-status-frontmatter.md) | fbece86..547c91d (지시서·구현 TDD 6건·스킬 규칙) |
 | 10 | 2026-08-17 | task | scripts, install, tests, docs | done | kit-doctor — 설치 자가진단(도구·CLI·전역 자산 존재·drift) + 누락 자산만 채우는 --add-missing (기존 파일 불변 | [PHASE10_doctor-upgrade-ux.md](PHASE10_doctor-upgrade-ux.md) | 49a7e05..b230d8a (23개 — feat 3 · fix 4 · test 10 · docs 6) |
 | 9 | 2026-08-17 | task | docs, install | done | dev-orchestrate-kit → aigsprac 리브랜딩 — 라이브 표면 치환 + 백로님 스토리 + 저장소·로컬 리네임 | [PHASE9_aigsprac-rebrand.md](PHASE9_aigsprac-rebrand.md) | 5ab35b8..8c0702e (10개 — task0~6 + 1b + 인덱스 2) |

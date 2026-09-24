@@ -57,22 +57,22 @@ class ApplyPlanProfileTest(unittest.TestCase):
     def test_pro_downgrades_workers_but_not_reviewers(self):
         result = self.apply("pro")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.model_of("doc-updater.md"), "haiku")
-        self.assertEqual(self.model_of("build-error-resolver.md"), "haiku")
-        self.assertEqual(self.model_of("code-reviewer.md"), "sonnet")
-        self.assertEqual(self.model_of("security-reviewer.md"), "sonnet")
+        self.assertEqual(self.model_of("doc-updater.md"), "claude-haiku-4-5-20251001")
+        self.assertEqual(self.model_of("build-error-resolver.md"), "claude-haiku-4-5-20251001")
+        self.assertEqual(self.model_of("code-reviewer.md"), "claude-sonnet-5")
+        self.assertEqual(self.model_of("security-reviewer.md"), "claude-sonnet-5")
 
     def test_pro_keeps_design_on_opus(self):
         self.apply("pro")
-        self.assertEqual(self.model_of("planner.md"), "opus")
+        self.assertEqual(self.model_of("planner.md"), "claude-opus-5")
 
     def test_task_orchestrator_is_quality_class(self):
         self.apply("pro")
-        self.assertEqual(self.model_of("task-orchestrator.md"), "sonnet")
+        self.assertEqual(self.model_of("task-orchestrator.md"), "claude-sonnet-5")
 
     def test_unlisted_agent_defaults_to_worker(self):
         self.apply("pro")
-        self.assertEqual(self.model_of("brand-new-agent.md"), "haiku")
+        self.assertEqual(self.model_of("brand-new-agent.md"), "claude-haiku-4-5-20251001")
 
     def test_pro_sets_token_env(self):
         self.apply("pro")
@@ -101,8 +101,8 @@ class ApplyPlanProfileTest(unittest.TestCase):
     def test_max20_restores_workers_to_sonnet(self):
         self.apply("pro")
         self.apply("max20")
-        self.assertEqual(self.model_of("doc-updater.md"), "sonnet")
-        self.assertEqual(self.model_of("code-reviewer.md"), "sonnet")
+        self.assertEqual(self.model_of("doc-updater.md"), "claude-sonnet-5")
+        self.assertEqual(self.model_of("code-reviewer.md"), "claude-sonnet-5")
 
     def test_never_writes_subagent_model_env(self):
         for profile in ("pro", "max5", "max20"):
@@ -114,6 +114,16 @@ class ApplyPlanProfileTest(unittest.TestCase):
         first = (self.agents / "doc-updater.md").read_text()
         self.apply("pro")
         self.assertEqual((self.agents / "doc-updater.md").read_text(), first)
+
+    def test_profile_table_uses_explicit_model_ids(self):
+        """별칭(`sonnet`)은 이전 세대로 해석돼 서브에이전트만 조용히 강등된다 — 표에 다시 들어오지 못하게 막는다."""
+        table = json.loads((KIT / "adapters/claude/global/plan-profiles.json").read_text())
+        for profile, spec in table["profiles"].items():
+            for role, model in spec["agents"].items():
+                self.assertTrue(
+                    model.startswith("claude-"),
+                    f"{profile}.{role} 이 별칭 '{model}' 을 쓴다 — 명시 모델 ID 를 쓸 것",
+                )
 
     def test_unknown_profile_exits_64(self):
         result = self.apply("nosuchplan")

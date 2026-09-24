@@ -300,6 +300,11 @@ add_missing_file() {
   if [ -d "$source_path" ]; then
     cp -R "$source_path" "$staging_path" 2>/dev/null
     copy_status=$?
+    # 중첩된 바이트코드 캐시도 스테이징에서 걷어낸다 (최상위는 check_tree 가 이미 거른다).
+    if [ "$copy_status" -eq 0 ]; then
+      find "$staging_path" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
+      find "$staging_path" -name '*.pyc' -type f -exec rm -f {} + 2>/dev/null
+    fi
   else
     cp "$source_path" "$staging_path" 2>/dev/null
     copy_status=$?
@@ -468,6 +473,10 @@ check_tree() {
   for source_entry in "$source_path"/* "$source_path"/.[!.]* "$source_path"/..?*; do
     [ -e "$source_entry" ] || continue
     entry_name=${source_entry##*/}
+    # 파이썬 바이트코드 캐시는 자산이 아니다 — 점검도 설치도 하지 않는다 (PR #21 리뷰 MEDIUM, 2026-09-23).
+    case "$entry_name" in
+      __pycache__|*.pyc) continue ;;
+    esac
     destination_entry="$destination_path/$entry_name"
     destination_entry_label="$destination_label/$entry_name"
     check_staging_leftovers "$destination_entry"

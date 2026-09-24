@@ -1,4 +1,5 @@
 """docs-index.py의 심링크 경로와 문서 디렉터리 오버라이드 테스트."""
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -9,6 +10,19 @@ from pathlib import Path
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "core/scripts/docs-index.py"
+
+
+def load_docs_index_module():
+    """스크립트를 모듈로 적재한다 (sort_rows 를 직접 호출해 정렬 계약을 잰다)."""
+    spec = importlib.util.spec_from_file_location("docs_index_under_test", SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True  # core/scripts/ 는 프로젝트에 트리째 찍힌다 — __pycache__ 를 남기지 않는다
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
 
 
 class TestDocsIndex(unittest.TestCase):
@@ -304,3 +318,58 @@ class TestDocsIndex(unittest.TestCase):
                 "매니페스트가 없는데도 조부모로 승격해 실제 문서를 건너뛰었다:\n"
                 f"{result.stdout}{result.stderr}",
             )
+
+
+class TestSortRows(unittest.TestCase):
+    """Phase 19: sort_rows 는 전순서다 — phase·date 동률을 doc 오름차순으로 깬다.
+
+    (phase, date) 만으로 정렬하면 동률 행의 순서가 rglob 의 파일시스템 순서에 좌우돼
+    호스트와 CI 러너의 INDEX.md 가 달라진다 (프로젝트 저장소 2026-09-04 실측).
+    """
+
+    def setUp(self):
+        self.sort_rows = load_docs_index_module().sort_rows
+
+    @staticmethod
+    def row(phase, date, doc):
+        return {"phase": phase, "date": date, "doc": doc}
+
+    def test_tie_on_phase_and_date_is_broken_by_doc_ascending(self):
+        rows = [self.row("0", "2026-09-04", "PHASE0_b.md"),
+                self.row("0", "2026-09-04", "PHASE0_a.md")]
+        self.assertEqual([r["doc"] for r in self.sort_rows(rows)],
+                         ["PHASE0_a.md", "PHASE0_b.md"])
+        # 입력 순서를 뒤집어도 결과는 같다 — 파일시스템 순서에 독립이다.
+        self.assertEqual([r["doc"] for r in self.sort_rows(list(reversed(rows)))],
+                         ["PHASE0_a.md", "PHASE0_b.md"])
+
+    def test_phase_then_date_descend_before_doc_breaks_ties(self):
+        rows = [self.row("1", "2026-09-01", "z.md"),
+                self.row("2", "2026-08-01", "y.md"),
+                self.row("2", "2026-09-01", "x.md"),
+                self.row("2", "2026-09-01", "w.md")]
+        self.assertEqual([r["doc"] for r in self.sort_rows(rows)],
+                         ["w.md", "x.md", "y.md", "z.md"])
+
+    def test_non_numeric_phase_sorts_last_and_input_is_not_mutated(self):
+        rows = [self.row("-", "2026-09-30", "design.md"),
+                self.row("3", "2026-01-01", "PHASE3.md")]
+        snapshot = [dict(r) for r in rows]
+        self.assertEqual([r["doc"] for r in self.sort_rows(rows)],
+                         ["PHASE3.md", "design.md"])
+        self.assertEqual(rows, snapshot)
+
+    def test_generated_index_orders_ties_by_doc_regardless_of_creation_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs" / "phases"
+            docs.mkdir(parents=True)
+            for name in ("PHASE0_zeta.md", "PHASE0_alpha.md"):  # 만드는 순서는 역순
+                (docs / name).write_text(
+                    "---\nphase: 0\ndate: 2026-09-04\nkind: task\nsummary: s\n---\n# s\n",
+                    encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SOURCE), "--docs-dir", str(docs)],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            index = (docs / "INDEX.md").read_text(encoding="utf-8")
+            self.assertLess(index.index("PHASE0_alpha.md"), index.index("PHASE0_zeta.md"))

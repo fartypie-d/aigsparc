@@ -1,3 +1,7 @@
+# 규칙(2026-09-22 실측): 이 파일은 `mapfile` 로 통째로 읽혀 한 줄이 `--allowedTools` 인자 하나가 되고, 파서는 인자 «안에서»
+#   소괄호 도구 표기를 찾는다 ⇒ **주석 `#` 은 은퇴가 아니다** — 앞의 `#` 와 뒤의 설명 문구가 있어도 그 줄은 실제로 허가된다.
+#   은퇴는 괄호를 바꿔서 한다: `Bash[...]` (대괄호는 문서로만 남고 허가로는 안 산다). 지우지 않는 이유는 «있었다»를 남기기 위해서다.
+#   줄 수는 도구 수가 아니다 — 확인은 소괄호 명세 줄과 맨이름 줄만 세라. 저장소별 도구 줄은 이 템플릿이 아니라 프로젝트 사본에 더한다.
 Read
 Edit
 Write
@@ -29,9 +33,9 @@ Bash(wc:*)
 Bash(date:*)
 Bash(ps:*)
 Bash(grep:*)
-Bash(mkdir -p .orchestrate:*)
-Bash(install -m 600 /dev/null .orchestrate/:*)
-Bash(cat > .orchestrate/:*)
+Bash[mkdir -p .orchestrate:*]                  # 은퇴 — 하위 디렉터리 생성은 작업 디렉터리 가드가 허용 목록보다 먼저 막는다 (2026-09-17 실측)
+Bash[install -m 600 /dev/null .orchestrate/:*] # 은퇴 — 빈 파일조차 안 만들어진다. 스크래치 파일은 `Write` 툴로 (2026-09-17 실측)
+Bash[cat > .orchestrate/:*]                    # 은퇴 — 셸 출력 리다이렉션(`>`)은 허용 목록보다 앞에서 차단된다 (2026-09-17 실측)
 Bash(cat .orchestrate/:*)
 Bash(printf:*)
 Bash(echo:*)

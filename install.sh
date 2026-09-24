@@ -511,6 +511,49 @@ report_ecc_lang_skip() {
   fi
 }
 
+# ECC 체크아웃을 업스트림에 맞춘다.
+#
+# 예전에는 `git pull --ff-only || note "…실패"` 한 줄이었다. 체크아웃에 로컬 커밋이
+# 하나라도 있으면 ff-only 는 반드시 실패하는데, 실패해도 경고 한 줄만 남기고 옛
+# 트리로 설치를 계속했다 — 2026-09-10 실측: 그 상태로 23일, 247커밋 뒤처진 문서가
+# 설치되고 있었고 install.sh 를 다시 돌려도 영원히 복구되지 않았다.
+#
+# 이제 발산(diverged)을 감지해 rebase 로 따라잡고, 그래도 안 되면 뒤처진 커밋 수와
+# 해소 명령을 명시한다. 어느 경우에도 설치 자체는 막지 않는다.
+sync_ecc_checkout() {
+  if ! git -C "$ECC_DIR" fetch --quiet origin; then
+    note "⚠️ ECC fetch 실패 — 기존 체크아웃으로 진행" >&2
+    return 0
+  fi
+
+  _ecc_upstream=$(git -C "$ECC_DIR" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo "origin/main")
+  _ecc_behind=$(git -C "$ECC_DIR" rev-list --count "HEAD..$_ecc_upstream" 2>/dev/null || echo 0)
+  _ecc_ahead=$(git -C "$ECC_DIR" rev-list --count "$_ecc_upstream..HEAD" 2>/dev/null || echo 0)
+
+  if [ "$_ecc_behind" -eq 0 ]; then
+    note "ECC 최신 ($_ecc_upstream)"
+    return 0
+  fi
+
+  if [ "$_ecc_ahead" -eq 0 ]; then
+    if git -C "$ECC_DIR" merge --ff-only "$_ecc_upstream" >/dev/null 2>&1; then
+      note "ECC $_ecc_behind 커밋 갱신"
+      return 0
+    fi
+  else
+    note "ECC 로컬 커밋 $_ecc_ahead 개 — rebase 로 $_ecc_behind 커밋 따라잡기 시도"
+    if git -C "$ECC_DIR" rebase --autostash "$_ecc_upstream" >/dev/null 2>&1; then
+      note "ECC rebase 완료 ($_ecc_behind 커밋 갱신, 로컬 커밋 $_ecc_ahead 개 유지)"
+      return 0
+    fi
+    git -C "$ECC_DIR" rebase --abort >/dev/null 2>&1 || true
+  fi
+
+  note "⚠️ ECC 갱신 실패 — $_ecc_upstream 대비 $_ecc_behind 커밋 뒤처진 체크아웃으로 설치한다." >&2
+  note "   해소: git -C $ECC_DIR rebase $_ecc_upstream (로컬 커밋 $_ecc_ahead 개는 충돌 시 직접 재적용)" >&2
+  return 0
+}
+
 detect_pm() {
   PM="none"
   PM_INSTALL=""
@@ -1515,7 +1558,7 @@ if [ "${#ECC_LANGS[@]}" -eq 0 ]; then
 fi
 if [ "${#ECC_LANGS[@]}" -gt 0 ]; then
   if [ -d "$ECC_DIR/.git" ]; then
-    git -C "$ECC_DIR" pull --ff-only || note "⚠️ ECC pull 실패 — 기존 체크아웃으로 진행" >&2
+    sync_ecc_checkout
   else
     git clone "$ECC_REPO" "$ECC_DIR"
   fi

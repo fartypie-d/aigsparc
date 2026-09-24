@@ -2,20 +2,21 @@
   "_comment": "Claude 요금제별 모델 프로파일. apply-plan-profile.sh 가 적용한다. main_model 이 null 이면 ~/.claude/settings.json 의 .model 을 건드리지 않는다(사용자 선택 유지). env 값이 null 이면 해당 키를 제거한다.",
   "_env_note": "토큰 env 2개는 요금제와 무관한 공통값이다 — x20 에서도 동일하게 쓴다. 실제 프로젝트들과 프로젝트 템플릿이 이미 10000/75 로 운영 중이다. 요금제가 가르는 것은 메인 모델과 worker 클래스뿐이다.",
   "_forbidden": "CLAUDE_CODE_SUBAGENT_MODEL 은 어떤 프로파일에도 넣지 않는다 — frontmatter 와 명시적 model 파라미터를 전부 덮어써서 리뷰어까지 강등시킨다.",
+  "_model_note": "에이전트 model 은 별칭이 아니라 명시 ID 로 쓴다. bare `sonnet` 은 이전 세대(claude-sonnet-4-6)로 해석되고 서브에이전트에서만 드리프트해 UI 로는 드러나지 않는다(2026-08-11 세션 로그 실측). main_model 은 메인 세션 모델이라 영향이 없어 별칭을 유지한다. 새 세대가 나오면 이 표를 갱신할 것.",
   "profiles": {
     "pro": {
       "main_model": "sonnet",
-      "agents": { "design": "opus", "quality": "sonnet", "worker": "haiku" },
+      "agents": { "design": "claude-opus-5", "quality": "claude-sonnet-5", "worker": "claude-haiku-4-5-20251001" },
       "env": { "MAX_THINKING_TOKENS": "10000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75" }
     },
     "max5": {
       "main_model": "opus",
-      "agents": { "design": "opus", "quality": "sonnet", "worker": "haiku" },
+      "agents": { "design": "claude-opus-5", "quality": "claude-sonnet-5", "worker": "claude-haiku-4-5-20251001" },
       "env": { "MAX_THINKING_TOKENS": "10000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75" }
     },
     "max20": {
       "main_model": null,
-      "agents": { "design": "opus", "quality": "sonnet", "worker": "sonnet" },
+      "agents": { "design": "claude-opus-5", "quality": "claude-sonnet-5", "worker": "claude-sonnet-5" },
       "env": { "MAX_THINKING_TOKENS": "10000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75" }
     }
   }

@@ -1,18 +1,42 @@
 """phase-tools.py 테스트 — 임시 git 저장소 + ORCH_STATE_DIR 격리."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-TOOLS = Path(__file__).resolve().parents[1] / "core/scripts/phase-tools.py"
+KIT_SCRIPTS = Path(__file__).resolve().parents[1] / "core/scripts"
+TOOLS = KIT_SCRIPTS / "phase-tools.py"
+# Phase 19: phase-tools 는 루트를 cwd 가 아니라 «스크립트 위치»로 앵커하고 cwd 저장소가 다르면
+# 중단한다(형제 저장소 오조작 방지). 그래서 각 픽스처 저장소에 스크립트 사본을 두고 그것을 부른다 —
+# 킷 원본을 임시 저장소 cwd 로 직접 부르면 앵커 불일치로 SystemExit 이 난다.
+STAMPED_SCRIPTS = ("phase-tools.py", "supervisor-state.sh")
 
 
-def run_tool(args, cwd, env, check=False):
+def stamp_tools(root):
+    """픽스처 저장소 <root>/scripts/ 에 phase-tools 와 동반 스크립트를 복사하고 진입점을 돌려준다."""
+    scripts = Path(root) / "scripts"
+    scripts.mkdir(exist_ok=True)
+    for name in STAMPED_SCRIPTS:
+        shutil.copy2(KIT_SCRIPTS / name, scripts / name)
+    return scripts / "phase-tools.py"
+
+
+def tool_for(cwd):
+    """cwd 또는 그 상위(워크트리 포함)에 찍힌 phase-tools 사본을 찾는다."""
+    for base in (Path(cwd), *Path(cwd).parents):
+        candidate = base / "scripts" / "phase-tools.py"
+        if candidate.is_file():
+            return candidate
+    raise AssertionError(f"phase-tools 사본이 없다 (stamp_tools 를 먼저 불러라): {cwd}")
+
+
+def run_tool(args, cwd, env, check=False, tool=None):
     r = subprocess.run(
-        [sys.executable, str(TOOLS), *args],
+        [sys.executable, str(tool or tool_for(cwd)), *args],
         cwd=cwd, env=env, capture_output=True, text=True,
         timeout=60,
     )
@@ -42,6 +66,7 @@ class Base(unittest.TestCase):
             "---\nphase: 7\nstatus: done\n---\n"
         )
         (self.root / "a.txt").write_text("a\n")
+        self.tool = stamp_tools(self.root)
         self.git("add", ".")
         self.git("commit", "-m", "init")
 
@@ -186,7 +211,7 @@ class TestClaim(Base):
         self.init_registry()
         procs = [
             subprocess.Popen(
-                [sys.executable, str(TOOLS), "claim", f"par-{i}"],
+                [sys.executable, str(self.tool), "claim", f"par-{i}"],
                 cwd=self.root, env=self.env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
@@ -689,7 +714,7 @@ class RetryGuardHardeningTest(Base):
 
     def guard(self, *flags, cwd=None, phase="17", part="3", tool=None, timeout=60):
         return subprocess.run(
-            [sys.executable, str(tool or TOOLS), "retry-guard", phase, part,
+            [sys.executable, str(tool or self.tool), "retry-guard", phase, part,
              *flags, "--state", str(self.state_file)],
             cwd=cwd or self.root, env=self.env, capture_output=True, text=True,
             timeout=timeout,
@@ -707,7 +732,7 @@ class RetryGuardHardeningTest(Base):
         link_dir = Path(self.tmp.name) / "scripts-link"
         link_dir.mkdir()
         entry = link_dir / "phase-tools.py"
-        entry.symlink_to(TOOLS)
+        entry.symlink_to(self.tool)
         r = self.guard("--record", tool=entry)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertRegex(self.read_state()["last_failure"]["worktree_hash"],
